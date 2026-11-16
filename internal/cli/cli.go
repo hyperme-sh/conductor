@@ -198,6 +198,8 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "endpoints file")
 	journalPath := fs.String("journal", "", "measurement journal")
+	phonePlane := fs.String("phone-plane", "", "HTTPS Plane authority for enrolled phone ingress")
+	phoneInterface := fs.String("phone-interface", "", "provisioned mesh interface for phone TLS ingress")
 	machinePlane := fs.String("machine-plane", "", "HTTPS Plane authority for machine prompt ingress (private socket only)")
 	peerGrantPath := fs.String("peer-grant", "", "optional single-hop peer ingress grant file")
 	socket := fs.Bool("socket", false, "serve a protected local socket (HYPERMESH_CONDUCTOR_SOCKET overrides its path)")
@@ -240,6 +242,28 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	server := proxy.New(cfg, hop, journal)
+	if *phonePlane != "" || *phoneInterface != "" {
+		if *phonePlane == "" || *socket || *stdinListener || cfg.ListenMode != config.ListenModeNetwork || cfg.AIU.Mode != config.AIUModeHTTP || validatePhoneInterface(cfg.Listen, *phoneInterface) != nil {
+			fmt.Fprintln(stderr, "phone ingress requires a provisioned mesh interface, explicit private listen address, TLS and authenticated AIuditor review")
+			return 2
+		}
+		server.PhoneFactory = func(next config.Config) (http.Handler, error) {
+			local := next
+			local.ListenMode = config.ListenModeLoopback
+			receiver := proxy.New(local, hop, journal)
+			handler, err := machineingress.New(machineingress.Client{Origin: *phonePlane, Phone: true}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			if err != nil {
+				return nil, err
+			}
+			handler.Authenticated = proxy.PromoteAuthenticatedConnection
+			return handler, nil
+		}
+		server.PhoneIngress, err = server.PhoneFactory(cfg)
+		if err != nil {
+			fmt.Fprintln(stderr, "invalid phone ingress configuration")
+			return 2
+		}
+	}
 	if *machinePlane != "" {
 		if !*socket || cfg.AIU.Mode != config.AIUModeHTTP {
 			fmt.Fprintln(stderr, "machine ingress requires private socket and authenticated AIuditor review")

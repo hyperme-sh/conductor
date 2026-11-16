@@ -29,7 +29,11 @@ func authority(t *testing.T, s Submission, mutate func(*Fact)) (*httptest.Server
 			w.WriteHeader(401)
 			return
 		}
-		if !strings.HasPrefix(r.URL.Path, "/api/v1/hypermesh/bots/"+s.Bot+"/machine/") {
+		kind := "machine"
+		if s.Enrollment != "" {
+			kind = "phone"
+		}
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/hypermesh/bots/"+s.Bot+"/"+kind+"/") {
 			t.Error("wrong path")
 			w.WriteHeader(404)
 			return
@@ -62,12 +66,20 @@ func authority(t *testing.T, s Submission, mutate func(*Fact)) (*httptest.Server
 				f.State = "unknown"
 			}
 		}
+		if s.Enrollment != "" {
+			if body["enrollment_id"] != s.Enrollment {
+				t.Error("enrollment not bound")
+			}
+			f.CallerDevice = s.Device
+			f.CallerEnrollment = s.Enrollment
+			f.Device = organization // independent stable execution identity in fixture
+		}
 		if mutate != nil {
 			mutate(&f)
 		}
 		json.NewEncoder(w).Encode(f)
 	}))
-	return server, &Client{Origin: server.URL, HTTP: server.Client()}
+	return server, &Client{Origin: server.URL, HTTP: server.Client(), Phone: s.Enrollment != ""}
 }
 func TestOwnerContextBindingAndCredentialIsolation(t *testing.T) {
 	s := submission()
@@ -91,7 +103,14 @@ func TestOwnerContextBindingAndCredentialIsolation(t *testing.T) {
 	}
 }
 func TestOneDispatchAndNoMachineCredentialToProvider(t *testing.T) {
+	t.Run("host", func(t *testing.T) { checkOneDispatch(t, false) })
+	t.Run("phone", func(t *testing.T) { checkOneDispatch(t, true) })
+}
+func checkOneDispatch(t *testing.T, phone bool) {
 	s := submission()
+	if phone {
+		s.Enrollment = uuid.NewString()
+	}
 	server, c := authority(t, s, nil)
 	defer server.Close()
 	calls := 0
@@ -197,5 +216,58 @@ func TestUnknownProviderOutcomeRemainsUnknown(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), r)
 	if final != "unknown" {
 		t.Fatal(final)
+	}
+}
+
+func TestPhoneCallerCannotBecomeExecutionHost(t *testing.T) {
+	s := submission()
+	s.Enrollment = uuid.NewString()
+	server, c := authority(t, s, nil)
+	defer server.Close()
+	fact, err := c.Check(t.Context(), "hm_msi_test", s.Binding, s.Task, s.Operation, strings.Repeat("a", 64), "begin")
+	if err != nil || fact.CallerDevice != s.Device || fact.Device == s.Device {
+		t.Fatal(fact, err)
+	}
+	if _, err := c.Check(t.Context(), "hm_msi_test", s.Binding, "", "", "", ""); err == nil {
+		t.Fatal("phone context accepted without operation")
+	}
+	for _, mutate := range []func(*Fact){
+		func(f *Fact) { f.CallerDevice = uuid.NewString() },
+		func(f *Fact) { f.CallerEnrollment = uuid.NewString() },
+		func(f *Fact) { f.Device = "" },
+	} {
+		server, c := authority(t, s, mutate)
+		if _, err := c.Check(t.Context(), "hm_msi_test", s.Binding, s.Task, s.Operation, strings.Repeat("a", 64), "begin"); err == nil {
+			t.Error("wrong phone binding accepted")
+		}
+		server.Close()
+	}
+}
+
+func TestPhoneConnectionAdmissionAndRefusal(t *testing.T) {
+	s := submission()
+	s.Enrollment = uuid.NewString()
+	server, c := authority(t, s, nil)
+	defer server.Close()
+	calls, admissions := 0, 0
+	h, _ := New(*c, s.Tenant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }), "X-Local", func() string { return "local" })
+	h.Authenticated = func(w http.ResponseWriter, r *http.Request) bool {
+		admissions++
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(503)
+		return false
+	}
+	raw, _ := json.Marshal(s)
+	for _, token := range []string{"invalid", "hm_msi_test", "hm_msi_test"} {
+		r := httptest.NewRequest("POST", "/v1/phone/prompt-submit", bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Header().Get("Connection") != "close" {
+			t.Fatal("rejected connection retained")
+		}
+	}
+	if calls != 0 || admissions != 1 {
+		t.Fatalf("dispatch=%d admission=%d", calls, admissions)
 	}
 }

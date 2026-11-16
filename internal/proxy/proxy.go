@@ -69,6 +69,8 @@ var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
 type Proxy struct {
 	recipes        *recipeRuntime
 	PeerIngress    http.Handler
+	PhoneIngress   http.Handler
+	PhoneFactory   func(config.Config) (http.Handler, error)
 	MachineIngress http.Handler
 	MachineFactory func(config.Config) (http.Handler, error)
 	PeerFactory    func(config.Config) (http.Handler, error)
@@ -338,13 +340,19 @@ func promoteNetworkConn(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// PromoteAuthenticatedConnection moves an owner-authenticated phone connection
+// out of the bounded pre-authentication pool before downstream dispatch.
+func PromoteAuthenticatedConnection(w http.ResponseWriter, r *http.Request) bool {
+	return promoteNetworkConn(w, r)
+}
+
 // ServeHTTP implements the local API.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.recipes != nil {
 		p.serveRuntime(w, r)
 		return
 	}
-	if p.Config.ListenMode == config.ListenModeNetwork {
+	if p.Config.ListenMode == config.ListenModeNetwork && !(p.PhoneIngress != nil && r.URL.Path == "/v1/phone/prompt-submit") {
 		if err := authorizeNetwork(r); err != nil {
 			closeNetworkConn(w)
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"message": err.Error()}})
@@ -371,6 +379,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w = deadlineWriter{ResponseWriter: w, idle: writeIdle}
+	if p.PhoneIngress != nil && r.URL.Path == "/v1/phone/prompt-submit" {
+		p.PhoneIngress.ServeHTTP(w, r)
+		return
+	}
 	if p.MachineIngress != nil && r.URL.Path == "/v1/machine/prompt-submit" {
 		p.MachineIngress.ServeHTTP(w, r)
 		return
