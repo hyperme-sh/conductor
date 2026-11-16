@@ -22,6 +22,8 @@ func (p *Proxy) EnableRecipeReload(path string) {
 	child := New(p.Config, p.Hop, p.Journal)
 	child.PeerFactory = p.PeerFactory
 	child.PeerIngress = p.PeerIngress
+	child.MachineIngress = p.MachineIngress
+	child.MachineFactory = p.MachineFactory
 	child.Notes = p.Notes
 	child.Logf = p.Logf
 	runtime := &recipeRuntime{path: path}
@@ -56,6 +58,14 @@ func (r *recipeRuntime) reload() error {
 	child := New(next, old.Hop, old.Journal)
 	child.PeerFactory = old.PeerFactory
 	child.PeerIngress = old.PeerIngress
+	child.MachineIngress = old.MachineIngress
+	child.MachineFactory = old.MachineFactory
+	if child.MachineFactory != nil {
+		child.MachineIngress, err = child.MachineFactory(next)
+		if err != nil {
+			return err
+		}
+	}
 	if child.PeerFactory != nil {
 		child.PeerIngress, err = child.PeerFactory(next)
 		if err != nil {

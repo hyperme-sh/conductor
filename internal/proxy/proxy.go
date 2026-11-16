@@ -66,14 +66,16 @@ var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
 
 // Proxy serves the local endpoints.
 type Proxy struct {
-	recipes     *recipeRuntime
-	PeerIngress http.Handler
-	PeerFactory func(config.Config) (http.Handler, error)
-	Config      config.Config
-	Hop         aiuditor.Hop
-	Journal     *metrics.Journal
-	Notes       *notes.Service
-	Logf        func(string, ...any)
+	recipes        *recipeRuntime
+	PeerIngress    http.Handler
+	MachineIngress http.Handler
+	MachineFactory func(config.Config) (http.Handler, error)
+	PeerFactory    func(config.Config) (http.Handler, error)
+	Config         config.Config
+	Hop            aiuditor.Hop
+	Journal        *metrics.Journal
+	Notes          *notes.Service
+	Logf           func(string, ...any)
 
 	transportOnce sync.Once
 	transport     *http.Transport
@@ -367,6 +369,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w = deadlineWriter{ResponseWriter: w, idle: writeIdle}
+	if p.MachineIngress != nil && r.URL.Path == "/v1/machine/prompt-submit" {
+		p.MachineIngress.ServeHTTP(w, r)
+		return
+	}
 	if p.PeerIngress != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/peer/prompt-submit" {
 		p.PeerIngress.ServeHTTP(w, r)
 		return
