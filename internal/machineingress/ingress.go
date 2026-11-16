@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
 )
 
 var refused = errors.New("machine operation unavailable or refused")
@@ -199,7 +200,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// No automatic retry follows begin. Even a lost response leaves the durable
 	// operation consumed, so a restarted Conductor cannot duplicate dispatch.
-	leaseCtx := ctx
+	leaseCtx, outcome := operationoutcome.Track(ctx)
 	// Each poll must finish before the most recently granted deadline. Failure
 	// cancels provider work; the caller sees an uncertain result, not a retry.
 	done := make(chan struct{})
@@ -246,10 +247,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	local.Header.Set("X-Conductor-Task", s.Task)
 	local.Header.Set("X-Conductor-Step", s.Operation)
 	local.Header.Set("X-Conductor-Class", s.Class)
+	local.Header.Set("X-Conductor-Expected-Model", s.Destination)
 	local.Header.Set(h.ProxyHeader, h.ProxyToken())
 	h.Dispatch.ServeHTTP(w, local)
 	command := "complete"
-	if leaseCtx.Err() != nil {
+	if leaseCtx.Err() != nil || !outcome.Known() {
 		command = "cancel"
 	}
 	finishCtx, finishCancel := context.WithTimeout(context.Background(), 5*time.Second)

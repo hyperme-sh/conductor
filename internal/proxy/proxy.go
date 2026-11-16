@@ -34,6 +34,7 @@ import (
 	"github.com/hyperme-sh/hypermesh-conductor/internal/localtransport"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/metrics"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/notes"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/prefix"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/routing"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/rules"
@@ -139,6 +140,7 @@ func (p *Proxy) ServeLocalListenerContext(ctx context.Context, listener net.List
 		return err
 	}
 	server := p.server()
+	defer server.Close()
 	defer listener.Close()
 	done := make(chan struct{})
 	defer close(done)
@@ -1095,6 +1097,7 @@ func (p *Proxy) journal(record metrics.StepRecord) {
 }
 
 func (p *Proxy) logRecord(client *http.Request, record metrics.StepRecord) {
+	operationoutcome.Record(client.Context(), record.UsageStatus != metrics.StatusUncertain)
 	if p.Logf == nil {
 		return
 	}

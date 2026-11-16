@@ -45,6 +45,8 @@ func TestPrivatePipeHTTPAndShutdown(t *testing.T) {
 		t.Fatalf("models status: %d", response.StatusCode)
 	}
 	cancel()
+	// Release client pipe handles before asking Windows to recreate this name.
+	transport.CloseIdleConnections()
 	select {
 	case err := <-done:
 		if !errors.Is(err, net.ErrClosed) && !errors.Is(err, http.ErrServerClosed) {

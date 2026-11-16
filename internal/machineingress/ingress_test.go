@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
 )
 
 func submission() Submission {
@@ -96,6 +97,10 @@ func TestOneDispatchAndNoMachineCredentialToProvider(t *testing.T) {
 	calls := 0
 	h, err := New(*c, s.Tenant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		operationoutcome.Record(r.Context(), true)
+		if r.Header.Get("X-Conductor-Expected-Model") != s.Destination {
+			t.Error("destination not enforced")
+		}
 		if r.Header.Get("Authorization") != "" || r.Header.Get("X-Local-Token") != "local-only" {
 			t.Error("credential leaked")
 		}
@@ -170,5 +175,27 @@ func TestOriginAndTenantRefusals(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != 400 {
 		t.Fatal(w.Code)
+	}
+}
+
+func TestUnknownProviderOutcomeRemainsUnknown(t *testing.T) {
+	s := submission()
+	var final string
+	server, c := authority(t, s, func(f *Fact) {
+		if f.State != "active" {
+			final = f.State
+		}
+	})
+	defer server.Close()
+	h, _ := New(*c, s.Tenant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		operationoutcome.Record(r.Context(), false)
+		w.WriteHeader(502)
+	}), "X-Local", func() string { return "local" })
+	raw, _ := json.Marshal(s)
+	r := httptest.NewRequest("POST", "/v1/machine/prompt-submit", bytes.NewReader(raw))
+	r.Header.Set("Authorization", "Bearer hm_msi_test")
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	if final != "unknown" {
+		t.Fatal(final)
 	}
 }
