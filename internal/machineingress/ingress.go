@@ -24,6 +24,7 @@ const OperationTimeout = 300 * time.Second
 var refused = errors.New("machine operation unavailable or refused")
 
 type Binding struct {
+	Enrollment string `json:"enrollment_id,omitempty"`
 	Version    int    `json:"version"`
 	Tenant     string `json:"tenant_id"`
 	Device     string `json:"device_id"`
@@ -41,23 +42,26 @@ type Submission struct {
 	MaxOutput   int    `json:"max_output_tokens"`
 }
 type Fact struct {
-	Version      int     `json:"version"`
-	Request      string  `json:"request_id"`
-	Tenant       string  `json:"tenant_id"`
-	Owner        string  `json:"owner_id"`
-	Principal    string  `json:"principal"`
-	Organization string  `json:"organization_id"`
-	Device       string  `json:"device_id"`
-	Bot          string  `json:"bot_id"`
-	Assignment   string  `json:"assignment_id"`
-	Session      string  `json:"session_id"`
-	Expires      float64 `json:"expires_at"`
-	Operation    string  `json:"operation_id,omitempty"`
-	Task         string  `json:"task_id,omitempty"`
-	Digest       string  `json:"request_sha256,omitempty"`
-	State        string  `json:"state,omitempty"`
+	CallerDevice     string  `json:"caller_device_id,omitempty"`
+	CallerEnrollment string  `json:"caller_enrollment_id,omitempty"`
+	Version          int     `json:"version"`
+	Request          string  `json:"request_id"`
+	Tenant           string  `json:"tenant_id"`
+	Owner            string  `json:"owner_id"`
+	Principal        string  `json:"principal"`
+	Organization     string  `json:"organization_id"`
+	Device           string  `json:"device_id"`
+	Bot              string  `json:"bot_id"`
+	Assignment       string  `json:"assignment_id"`
+	Session          string  `json:"session_id"`
+	Expires          float64 `json:"expires_at"`
+	Operation        string  `json:"operation_id,omitempty"`
+	Task             string  `json:"task_id,omitempty"`
+	Digest           string  `json:"request_sha256,omitempty"`
+	State            string  `json:"state,omitempty"`
 }
 type Client struct {
+	Phone  bool
 	Origin string
 	HTTP   *http.Client
 }
@@ -88,6 +92,9 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 	if !ValidOrigin(c.Origin) || !b.Valid() || !strings.HasPrefix(token, "hm_msi_") || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
 		return Fact{}, refused
 	}
+	if (c.Phone && (!canonicalID(b.Enrollment) || task == "")) || (!c.Phone && b.Enrollment != "") {
+		return Fact{}, refused
+	}
 	nonce := uuid.NewString()
 	body := map[string]any{"version": 1, "request_id": nonce, "device_id": b.Device, "assignment_id": b.Assignment, "session_id": b.Session}
 	path := "context"
@@ -101,10 +108,15 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 		body["command"] = command
 		path = "operation"
 	}
+	kind := "machine"
+	if c.Phone {
+		kind = "phone"
+		body["enrollment_id"] = b.Enrollment
+	}
 	raw, _ := json.Marshal(body)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.Origin, "/")+"/api/v1/hypermesh/bots/"+b.Bot+"/machine/"+path, bytes.NewReader(raw))
+	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.Origin, "/")+"/api/v1/hypermesh/bots/"+b.Bot+"/"+kind+"/"+path, bytes.NewReader(raw))
 	if e != nil {
 		return Fact{}, refused
 	}
@@ -135,7 +147,14 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 		return Fact{}, refused
 	}
 	now := float64(time.Now().UnixNano()) / 1e9
-	if fact.Version != 1 || fact.Request != nonce || fact.Tenant != b.Tenant || fact.Device != b.Device || fact.Bot != b.Bot || fact.Assignment != b.Assignment || fact.Session != b.Session || !canonicalID(fact.Owner) || !canonicalID(fact.Organization) || fact.Principal == "" || len(fact.Principal) > 512 || fact.Expires <= now || fact.Expires > now+11 {
+	if fact.Version != 1 || fact.Request != nonce || fact.Tenant != b.Tenant || fact.Bot != b.Bot || fact.Assignment != b.Assignment || fact.Session != b.Session || !canonicalID(fact.Owner) || !canonicalID(fact.Organization) || fact.Principal == "" || len(fact.Principal) > 512 || fact.Expires <= now || fact.Expires > now+11 {
+		return Fact{}, refused
+	}
+	if c.Phone {
+		if !canonicalID(fact.Device) || fact.CallerDevice != b.Device || fact.CallerEnrollment != b.Enrollment {
+			return Fact{}, refused
+		}
+	} else if fact.Device != b.Device || fact.CallerDevice != "" || fact.CallerEnrollment != "" {
 		return Fact{}, refused
 	}
 	if task != "" && (fact.Task != task || fact.Operation != operation || fact.Digest != digest || (command == "begin" || command == "check") && fact.State != "active" || command == "complete" && fact.State != "completed" || command == "cancel" && fact.State != "unknown") {
@@ -226,7 +245,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				checkCtx, stop := context.WithDeadline(ctx, time.Unix(0, int64(deadline*1e9)))
 				next, err := h.Client.Check(checkCtx, token, s.Binding, s.Task, s.Operation, digest, "check")
 				stop()
-				if err != nil || next.Owner != fact.Owner || next.Principal != fact.Principal || next.Organization != fact.Organization {
+				if err != nil || next.Owner != fact.Owner || next.Principal != fact.Principal || next.Organization != fact.Organization || next.Device != fact.Device {
 					cancel()
 					return
 				}
