@@ -251,7 +251,12 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 			local := next
 			local.ListenMode = config.ListenModeLoopback
 			receiver := proxy.New(local, hop, journal)
-			return machineingress.New(machineingress.Client{Origin: *phonePlane, Phone: true}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			handler, err := machineingress.New(machineingress.Client{Origin: *phonePlane, Phone: true}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			if err != nil {
+				return nil, err
+			}
+			handler.Authenticated = proxy.PromoteAuthenticatedConnection
+			return handler, nil
 		}
 		server.PhoneIngress, err = server.PhoneFactory(cfg)
 		if err != nil {

@@ -340,6 +340,12 @@ func promoteNetworkConn(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// PromoteAuthenticatedConnection moves an owner-authenticated phone connection
+// out of the bounded pre-authentication pool before downstream dispatch.
+func PromoteAuthenticatedConnection(w http.ResponseWriter, r *http.Request) bool {
+	return promoteNetworkConn(w, r)
+}
+
 // ServeHTTP implements the local API.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.recipes != nil {

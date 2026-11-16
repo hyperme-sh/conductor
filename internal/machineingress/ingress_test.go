@@ -243,3 +243,31 @@ func TestPhoneCallerCannotBecomeExecutionHost(t *testing.T) {
 		server.Close()
 	}
 }
+
+func TestPhoneConnectionAdmissionAndRefusal(t *testing.T) {
+	s := submission()
+	s.Enrollment = uuid.NewString()
+	server, c := authority(t, s, nil)
+	defer server.Close()
+	calls, admissions := 0, 0
+	h, _ := New(*c, s.Tenant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }), "X-Local", func() string { return "local" })
+	h.Authenticated = func(w http.ResponseWriter, r *http.Request) bool {
+		admissions++
+		w.Header().Set("Connection", "close")
+		w.WriteHeader(503)
+		return false
+	}
+	raw, _ := json.Marshal(s)
+	for _, token := range []string{"invalid", "hm_msi_test", "hm_msi_test"} {
+		r := httptest.NewRequest("POST", "/v1/phone/prompt-submit", bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Header().Get("Connection") != "close" {
+			t.Fatal("rejected connection retained")
+		}
+	}
+	if calls != 0 || admissions != 1 {
+		t.Fatalf("dispatch=%d admission=%d", calls, admissions)
+	}
+}

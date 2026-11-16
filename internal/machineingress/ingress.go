@@ -167,12 +167,13 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 }
 
 type Handler struct {
-	Client      Client
-	Tenant      string
-	Dispatch    http.Handler
-	ProxyHeader string
-	ProxyToken  func() string
-	slots       chan struct{}
+	Authenticated func(http.ResponseWriter, *http.Request) bool
+	Client        Client
+	Tenant        string
+	Dispatch      http.Handler
+	ProxyHeader   string
+	ProxyToken    func() string
+	slots         chan struct{}
 }
 
 func New(client Client, tenant string, dispatch http.Handler, header string, token func() string) (*Handler, error) {
@@ -183,7 +184,7 @@ func New(client Client, tenant string, dispatch http.Handler, header string, tok
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	fail := func(code int) { http.Error(w, refused.Error(), code) }
+	fail := func(code int) { w.Header().Set("Connection", "close"); http.Error(w, refused.Error(), code) }
 	if r.Method != "POST" {
 		fail(405)
 		return
@@ -217,6 +218,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fact, e := h.Client.Check(ctx, token, s.Binding, s.Task, s.Operation, digest, "begin")
 	if e != nil {
 		fail(403)
+		return
+	}
+	if h.Authenticated != nil && !h.Authenticated(w, r) {
+		// Admission is consumed even if the shared connection pool is full.
+		_, _ = h.Client.Check(ctx, token, s.Binding, s.Task, s.Operation, digest, "cancel")
 		return
 	}
 	// No automatic retry follows begin. Even a lost response leaves the durable
