@@ -85,12 +85,25 @@ func ValidOrigin(origin string) bool {
 // Check authenticates through the existing Plane owner. An absent task requests
 // preview context only; it never consumes an operation or authorizes execution.
 func (c Client) Check(ctx context.Context, token string, b Binding, task, operation, digest, command string) (Fact, error) {
+	return c.check(ctx, token, b, task, operation, digest, command, false)
+}
+
+// ActiveContext requires current running consent and a fresh heartbeat.
+// It establishes identity only; policy and OS access remain separate checks.
+func (c Client) ActiveContext(ctx context.Context, token string, b Binding) (Fact, error) {
+	return c.check(ctx, token, b, "", "", "", "", true)
+}
+
+func (c Client) check(ctx context.Context, token string, b Binding, task, operation, digest, command string, active bool) (Fact, error) {
 	if !ValidOrigin(c.Origin) || !b.Valid() || !strings.HasPrefix(token, "hm_msi_") || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
 		return Fact{}, refused
 	}
 	nonce := uuid.NewString()
 	body := map[string]any{"version": 1, "request_id": nonce, "device_id": b.Device, "assignment_id": b.Assignment, "session_id": b.Session}
 	path := "context"
+	if active {
+		path = "access-context"
+	}
 	if task != "" {
 		if !canonicalID(task) || !canonicalID(operation) || len(digest) != 64 {
 			return Fact{}, refused

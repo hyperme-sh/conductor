@@ -40,6 +40,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "machine-context", "machine-prompt":
 		return machinePromptCmd(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "permission-read-review":
+		return accessReviewCmd(true, args[1:], os.Stdin, stdout, stderr)
 	case "permission-preview":
 		return accessPreviewCmd(args[1:], os.Stdin, stdout, stderr)
 	case "capability-catalog":

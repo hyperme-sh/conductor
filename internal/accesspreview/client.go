@@ -5,12 +5,15 @@ package accesspreview
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +36,7 @@ type Action struct {
 	Arguments string `json:"arguments_sha256"`
 }
 type Request struct {
+	ExpectedPolicy string  `json:"expected_policy_revision,omitempty"`
 	ContextExpires float64 `json:"context_expires_at,omitempty"`
 	machineingress.Binding
 	RequestID       string `json:"request_id"`
@@ -92,6 +96,15 @@ func limit(l Limits) bool {
 	return l.Bytes > 0 && l.Bytes <= 67108864 && l.Seconds > 0 && l.Seconds <= 300
 }
 func (c Client) Preview(ctx context.Context, raw []byte) (Result, error) {
+	return c.review(ctx, raw, false)
+}
+
+// ReviewRead binds a current active Plane identity to AIuditor's exact read.
+func (c Client) ReviewRead(ctx context.Context, raw []byte) (Result, error) {
+	return c.review(ctx, raw, true)
+}
+
+func (c Client) review(ctx context.Context, raw []byte, active bool) (Result, error) {
 	var envelope Envelope
 	if len(raw) > 262144 || decode(raw, &envelope) != nil {
 		return Result{}, Refused
@@ -105,13 +118,33 @@ func (c Client) Preview(ctx context.Context, raw []byte) (Result, error) {
 			return Result{}, Refused
 		}
 	}
+	endpointPath := "/api/v1/aiuditor/access/preview"
+	if active {
+		endpointPath = "/api/v1/aiuditor/access/read-review"
+		digest, err := hex.DecodeString(p.Action.Arguments)
+		if err != nil || len(digest) != 32 || strings.ToLower(p.Action.Arguments) != p.Action.Arguments || p.Action.Operation != "read" || !path.IsAbs(p.Project) || path.Clean(p.Project) != p.Project || p.Project == "/" || path.Clean(p.Action.Target) != p.Action.Target || !strings.HasPrefix(p.Action.Target, p.Project+"/") || strings.ContainsAny(p.Action.Target, "*?\\") || p.ExpectedPolicy != "" && !id(p.ExpectedPolicy) {
+			return Result{}, Refused
+		}
+		for _, ch := range p.Action.Target {
+			if ch < 32 || ch == 127 {
+				return Result{}, Refused
+			}
+		}
+	} else if p.ExpectedPolicy != "" {
+		return Result{}, Refused
+	}
 	endpoint, e := url.Parse(c.Endpoint)
-	if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != "/api/v1/aiuditor/access/preview" {
+	if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != endpointPath {
 		return Result{}, Refused
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	fact, e := c.Plane.Check(ctx, envelope.Credential, p.Binding, "", "", "", "")
+	var fact machineingress.Fact
+	if active {
+		fact, e = c.Plane.ActiveContext(ctx, envelope.Credential, p.Binding)
+	} else {
+		fact, e = c.Plane.Check(ctx, envelope.Credential, p.Binding, "", "", "", "")
+	}
 	if e != nil {
 		return Result{}, Refused
 	}
@@ -147,7 +180,10 @@ func (c Client) Preview(ctx context.Context, raw []byte) (Result, error) {
 	}
 	expected := Identity{Tenant: fact.Tenant, Owner: fact.Owner, Principal: fact.Principal, Organization: fact.Organization, Device: fact.Device, Bot: fact.Bot, Assignment: fact.Assignment, Session: fact.Session}
 	now := float64(time.Now().UnixNano()) / 1e9
-	if result.Version != 1 || result.RequestID != p.RequestID || !result.PreviewOnly || result.Identity != expected || !reflect.DeepEqual(result.Action, p.Action) || result.Project != p.Project || !id(result.PolicyRevision) || result.Expires <= now || result.Expires > fact.Expires || !limit(result.Limits) || result.Limits.Bytes > p.Action.Limits.Bytes || result.Limits.Seconds > p.Action.Limits.Seconds || len(result.Reason) == 0 || len(result.Reason) > 256 {
+	if result.Version != 1 || result.RequestID != p.RequestID || result.PreviewOnly == active || result.Identity != expected || !reflect.DeepEqual(result.Action, p.Action) || result.Project != p.Project || !id(result.PolicyRevision) || result.Expires <= now || result.Expires > fact.Expires || !limit(result.Limits) || result.Limits.Bytes > p.Action.Limits.Bytes || result.Limits.Seconds > p.Action.Limits.Seconds || len(result.Reason) == 0 || len(result.Reason) > 256 {
+		return Result{}, Refused
+	}
+	if active && result.Permitted && (result.Limits != p.Action.Limits || p.ExpectedPolicy != "" && result.PolicyRevision != p.ExpectedPolicy) {
 		return Result{}, Refused
 	}
 	switch result.Decision {
