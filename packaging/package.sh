@@ -82,7 +82,7 @@ for goarch in "${targets[@]}"; do
   got_deb_arch=$(dpkg-deb -f "$deb" Architecture)
   got_deb_name=$(dpkg-deb -f "$deb" Package)
   got_deb_home=$(dpkg-deb -f "$deb" Homepage)
-  if [[ "$got_deb_arch" != "$deb_arch" || "$got_deb_name" != "hypermesh-conductor" || "$got_deb_home" != "https://github.com/hyperme-sh/hypermesh-conductor" ]]; then
+  if [[ "$got_deb_arch" != "$deb_arch" || "$got_deb_name" != "hypermesh-conductor" || "$got_deb_home" != "https://github.com/hyperme-sh/conductor" ]]; then
     echo "unexpected deb metadata for $deb: $got_deb_name $got_deb_arch $got_deb_home" >&2
     exit 1
   fi
@@ -92,7 +92,7 @@ for goarch in "${targets[@]}"; do
   fi
   if command -v rpm >/dev/null 2>&1; then
     got_rpm=$(rpm -qp --queryformat '%{NAME} %{ARCH} %{URL}' "$rpm")
-    if [[ "$got_rpm" != "hypermesh-conductor ${rpm_arch} https://github.com/hyperme-sh/hypermesh-conductor" ]]; then
+    if [[ "$got_rpm" != "hypermesh-conductor ${rpm_arch} https://github.com/hyperme-sh/conductor" ]]; then
       echo "unexpected rpm metadata for $rpm: $got_rpm" >&2
       exit 1
     fi
