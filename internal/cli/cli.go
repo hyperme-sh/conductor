@@ -38,6 +38,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
+	case "permission-preview":
+		return accessPreviewCmd(args[1:], os.Stdin, stdout, stderr)
 	case "capability-catalog":
 		return capabilityCatalogCmd(args[1:], stdout, stderr)
 	case "capability-dispatch":
