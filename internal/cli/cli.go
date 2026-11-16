@@ -23,6 +23,7 @@ import (
 	"github.com/hyperme-sh/hypermesh-conductor/internal/history"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/leases"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/localtransport"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/machineingress"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/metrics"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/notes"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/proxy"
@@ -193,6 +194,7 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", "", "endpoints file")
 	journalPath := fs.String("journal", "", "measurement journal")
+	machinePlane := fs.String("machine-plane", "", "HTTPS Plane authority for machine prompt ingress (private socket only)")
 	peerGrantPath := fs.String("peer-grant", "", "optional single-hop peer ingress grant file")
 	socket := fs.Bool("socket", false, "serve a protected local socket (HYPERMESH_CONDUCTOR_SOCKET overrides its path)")
 	parentPID := fs.Int("parent-pid", 0, "stop the private socket server when this parent exits")
@@ -234,6 +236,21 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	server := proxy.New(cfg, hop, journal)
+	if *machinePlane != "" {
+		if !*socket || cfg.AIU.Mode != config.AIUModeHTTP {
+			fmt.Fprintln(stderr, "machine ingress requires private socket and authenticated AIuditor review")
+			return 2
+		}
+		server.MachineFactory = func(next config.Config) (http.Handler, error) {
+			receiver := proxy.New(next, hop, journal)
+			return machineingress.New(machineingress.Client{Origin: *machinePlane}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+		}
+		server.MachineIngress, err = server.MachineFactory(cfg)
+		if err != nil {
+			fmt.Fprintln(stderr, "invalid machine ingress configuration")
+			return 2
+		}
+	}
 	if *peerGrantPath != "" {
 		// Peer submissions have no access to the operator's local note service.
 		server.PeerFactory = func(next config.Config) (http.Handler, error) {
