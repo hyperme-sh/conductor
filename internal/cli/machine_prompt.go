@@ -19,8 +19,8 @@ func machinePromptCmd(action string, args []string, stdin io.Reader, stdout, std
 	if fs.Parse(args) != nil || fs.NArg() != 0 {
 		return 2
 	}
-	raw, e := io.ReadAll(io.LimitReader(stdin, 262145))
-	if e != nil || len(raw) > 262144 {
+	raw, e := io.ReadAll(io.LimitReader(stdin, 786433))
+	if e != nil || len(raw) > 786432 {
 		return 1
 	}
 	var input struct {

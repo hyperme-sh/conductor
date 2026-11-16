@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func TestSubmitUsesVerifiedSocketAndExactOwnerBytes(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	raw := []byte(`{ "owner_authorized": true }`)
+	raw := []byte(`{ "prompt": "` + strings.Repeat(`\n`, 50000) + `" }`)
 	count := 0
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count++

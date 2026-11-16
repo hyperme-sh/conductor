@@ -16,10 +16,10 @@ import (
 // Submit sends the exact owner-authorized bytes over the verified private socket.
 // It never retries, follows redirects, or substitutes an HTTP network endpoint.
 func Submit(ctx context.Context, socket, credential string, raw []byte) (json.RawMessage, error) {
-	if !strings.HasPrefix(credential, "hm_msi_") || len(credential) > 4096 || strings.ContainsAny(credential, "\r\n") || len(raw) > 96<<10 || !json.Valid(raw) {
+	if !strings.HasPrefix(credential, "hm_msi_") || len(credential) > 4096 || strings.ContainsAny(credential, "\r\n") || len(raw) > 512<<10 || !json.Valid(raw) {
 		return nil, refused
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, OperationTimeout+10*time.Second)
 	defer cancel()
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return localtransport.DialContext(ctx, socket)
@@ -40,8 +40,8 @@ func Submit(ctx context.Context, socket, credential string, raw []byte) (json.Ra
 	if response.StatusCode != 200 {
 		return nil, refused
 	}
-	body, e := io.ReadAll(io.LimitReader(response.Body, 262145))
-	if e != nil || len(body) > 262144 || !json.Valid(body) {
+	body, e := io.ReadAll(io.LimitReader(response.Body, 524289))
+	if e != nil || len(body) > 524288 || !json.Valid(body) {
 		return nil, refused
 	}
 	return body, nil
