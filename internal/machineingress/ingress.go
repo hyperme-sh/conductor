@@ -19,6 +19,8 @@ import (
 	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
 )
 
+const OperationTimeout = 300 * time.Second
+
 var refused = errors.New("machine operation unavailable or refused")
 
 type Binding struct {
@@ -175,7 +177,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 96<<10))
+	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 512<<10))
 	if e != nil {
 		fail(400)
 		return
@@ -191,7 +193,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// delivery; no language-dependent JSON canonicalization is assumed.
 	sum := sha256.Sum256(raw)
 	digest := hex.EncodeToString(sum[:])
-	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), OperationTimeout)
 	defer cancel()
 	fact, e := h.Client.Check(ctx, token, s.Binding, s.Task, s.Operation, digest, "begin")
 	if e != nil {
