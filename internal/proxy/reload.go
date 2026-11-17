@@ -140,6 +140,15 @@ func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if policyView {
+		defaultClass := cfg.DefaultClass
+		if defaultClass == "" {
+			var err error
+			defaultClass, err = cfg.FallbackClass()
+			if err != nil {
+				writeJSON(w, 503, map[string]any{"error": "routing policy unavailable"})
+				return
+			}
+		}
 		classes := map[string]string{}
 		for class := range routing.DefaultTiers {
 			decision, err := routing.Route(class, "", rules.EffectiveClassTiers(cfg.ClassTiers, policy, class, 0))
@@ -157,7 +166,7 @@ func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective-policy.v1", "tiers": result,
-			"routing": map[string]any{"default_class": cfg.DefaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}})
+			"routing": map[string]any{"default_class": defaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}})
 		return
 	}
 	writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective.v1", "tiers": result})

@@ -82,3 +82,35 @@ func TestPolicyViewContract(t *testing.T) {
 		t.Fatal("legacy snapshot now depends on policy read")
 	}
 }
+
+func TestPolicyViewUsesRuntimeClassFallback(t *testing.T) {
+	t.Setenv(config.ProxyTokenEnv, "fixture-token")
+	for _, name := range []string{"cheap", "frontier"} {
+		cfg := config.Config{}
+		tier := config.Tier{Name: name, Model: "fixture", BaseURL: "http://127.0.0.1:1"}
+		want := "parse"
+		if name == "cheap" {
+			cfg.Cheap = tier
+		} else {
+			cfg.Frontier = tier
+			want = "code"
+		}
+		p := New(cfg, nil, nil)
+		p.EnableRecipeReload("")
+		req := httptest.NewRequest("GET", "/v1/config/policy", nil)
+		req.Header.Set(config.ProxyTokenHeader, "fixture-token")
+		out := httptest.NewRecorder()
+		p.serveRuntime(out, req)
+		var body struct {
+			Routing struct {
+				Default string `json:"default_class"`
+			}
+		}
+		if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if out.Code != 200 || body.Routing.Default != want {
+			t.Fatal(out.Code, out.Body.String())
+		}
+	}
+}
