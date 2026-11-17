@@ -218,3 +218,15 @@ features become `unknown`. The seven feature states are `verified`, `unknown` or
 The view uses existing proxy authorization, is uncacheable, and exposes no
 endpoint, credential name, recipe path or raw configuration. It does not enumerate
 unconfigured alternatives, perform new verification, or authorize execution.
+
+### Read-only recipe validation
+
+Authenticated `POST /v1/config/validate` accepts at most 64 KiB of recipe JSON.
+It shares the recipe file loader and validates against a copied active
+configuration, without applying the draft, reading a file, contacting endpoints
+or reserving tokens. The uncacheable `hypermesh.conductor.recipe-validation.v1`
+response has `valid` and a fixed `field`: empty on success, or `recipe`,
+`tier-selection`, `task-total-limit`, `task-output-limit`, or a cheap/frontier
+`-model`, `-output`, `-context`, `-capabilities` field on refusal. Raw errors and
+private configuration are never returned. This is a point-in-time recipe check,
+not input counting, a remaining allowance, save authorization or execution.

@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -92,15 +93,28 @@ func (r *recipeRuntime) reload() error {
 }
 
 func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" {
+	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" && r.URL.Path != "/v1/config/validate" {
 		p.recipes.active.Load().ServeHTTP(w, r)
 		return
 	}
-	if r.URL.Path == "/v1/config/models" {
+	if r.URL.Path == "/v1/config/models" || r.URL.Path == "/v1/config/validate" {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	if err := authorizeProxy(r); err != nil {
 		writeJSON(w, 401, map[string]any{"error": "proxy authorization required"})
+		return
+	}
+	if r.URL.Path == "/v1/config/validate" {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 65536))
+		if err != nil {
+			writeJSON(w, 413, map[string]any{"error": "recipe body unavailable or too large"})
+			return
+		}
+		writeJSON(w, 200, config.ValidateRecipe(body, p.recipes.active.Load().Config))
 		return
 	}
 	if r.URL.Path == "/v1/config/reload" {

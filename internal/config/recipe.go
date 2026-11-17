@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,6 +27,10 @@ func loadRecipe(path string, cheap, frontier *Tier) error {
 		return err
 	}
 	defer file.Close()
+	return applyRecipe(file, cheap, frontier)
+}
+
+func applyRecipe(reader io.Reader, cheap, frontier *Tier) error {
 	var recipe struct {
 		TaskTokenLimit  json.RawMessage `json:"max_task_tokens"`
 		TaskOutputLimit json.RawMessage `json:"max_task_output_tokens"`
@@ -33,7 +39,7 @@ func loadRecipe(path string, cheap, frontier *Tier) error {
 		Frontier        recipeTier      `json:"frontier"`
 	}
 	hash := sha256.New()
-	decoder := json.NewDecoder(io.TeeReader(file, hash))
+	decoder := json.NewDecoder(io.TeeReader(reader, hash))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&recipe); err != nil {
 		return fmt.Errorf("recipe: %w", err)
@@ -43,11 +49,11 @@ func loadRecipe(path string, cheap, frontier *Tier) error {
 	}
 	var totalLimit int
 	if recipe.TaskTokenLimit != nil && (json.Unmarshal(recipe.TaskTokenLimit, &totalLimit) != nil || totalLimit < 1 || totalLimit > 2147483647) {
-		return fmt.Errorf("invalid max_task_tokens")
+		return recipeField("task-total-limit", "invalid max_task_tokens")
 	}
 	var taskLimit int
 	if recipe.TaskOutputLimit != nil && (json.Unmarshal(recipe.TaskOutputLimit, &taskLimit) != nil || taskLimit < 1 || taskLimit > 2147483647) {
-		return fmt.Errorf("invalid max_task_output_tokens")
+		return recipeField("task-output-limit", "invalid max_task_output_tokens")
 	}
 	for _, entry := range []struct {
 		name     string
@@ -56,30 +62,33 @@ func loadRecipe(path string, cheap, frontier *Tier) error {
 	}{{routing.Cheap, cheap, recipe.Cheap}, {routing.Frontier, frontier, recipe.Frontier}} {
 		if !entry.tier.Configured() {
 			if strings.TrimSpace(entry.settings.Model) != "" || entry.settings.MaxOutputTokens != 0 || entry.settings.ContextWindow != nil {
-				return fmt.Errorf("recipe %s requires that tier in the endpoints file", entry.name)
+				return recipeField("tier-selection", "recipe %s requires that tier in the endpoints file", entry.name)
 			}
 			continue
 		}
-		if entry.settings.Model != entry.tier.Model || entry.settings.MaxOutputTokens < 1 || entry.settings.MaxOutputTokens > 2147483647 {
-			return fmt.Errorf("recipe %s requires configured model %q and a positive 32-bit output limit", entry.tier.Name, entry.tier.Model)
+		if entry.settings.Model != entry.tier.Model {
+			return recipeField(entry.name+"-model", "recipe %s requires configured model %q", entry.tier.Name, entry.tier.Model)
+		}
+		if entry.settings.MaxOutputTokens < 1 || entry.settings.MaxOutputTokens > 2147483647 {
+			return recipeField(entry.name+"-output", "recipe requires a positive 32-bit output limit")
 		}
 		if len(entry.settings.RequiredCapabilities) > 0 {
 			if entry.tier.Capabilities == nil {
-				return fmt.Errorf("recipe requires a verified capability record")
+				return recipeField(entry.name+"-capabilities", "recipe requires a verified capability record")
 			}
 			if err := entry.tier.Capabilities.Require(entry.tier.Model, entry.tier.RuntimeRevision, entry.tier.Provider, entry.settings.RequiredCapabilities, false); err != nil {
-				return err
+				return recipeField(entry.name+"-capabilities", "%s", err)
 			}
 		}
 		entry.tier.RequiredCapabilities = append([]string(nil), entry.settings.RequiredCapabilities...)
 		var window int
 		if entry.settings.ContextWindow != nil {
 			if json.Unmarshal(entry.settings.ContextWindow, &window) != nil || window <= 0 || window > 2147483647 || entry.tier.InputCounter != "vllm" {
-				return fmt.Errorf("recipe %s requires a positive 32-bit context window and configured vllm input counter", entry.tier.Name)
+				return recipeField(entry.name+"-context", "recipe %s requires a positive 32-bit context window and configured vllm input counter", entry.tier.Name)
 			}
 		}
 		if totalLimit > 0 && entry.tier.InputCounter != "vllm" {
-			return fmt.Errorf("max_task_tokens requires a vllm counter on %s", entry.tier.Name)
+			return recipeField("task-total-limit", "max_task_tokens requires a vllm counter on %s", entry.tier.Name)
 		}
 		entry.tier.TaskTokenLimit = totalLimit
 		entry.tier.ContextWindow = window
@@ -88,4 +97,40 @@ func loadRecipe(path string, cheap, frontier *Tier) error {
 		entry.tier.OutputLimit = entry.settings.MaxOutputTokens
 	}
 	return nil
+}
+
+// RecipeValidation never returns parser text, configured model names or file paths.
+type RecipeValidation struct {
+	Schema string `json:"schema"`
+	Valid  bool   `json:"valid"`
+	Field  string `json:"field"`
+}
+type recipeFieldError struct {
+	field string
+	err   error
+}
+
+func (e *recipeFieldError) Error() string { return e.err.Error() }
+func recipeField(field, format string, args ...any) error {
+	return &recipeFieldError{field, fmt.Errorf(format, args...)}
+}
+
+// ValidateRecipe applies the loader to value copies; active limits and records are untouched.
+func ValidateRecipe(data []byte, current Config) RecipeValidation {
+	result := RecipeValidation{Schema: "hypermesh.conductor.recipe-validation.v1", Field: "recipe"}
+	if len(data) > 65536 {
+		return result
+	}
+	cheap, frontier := current.Cheap, current.Frontier
+	err := applyRecipe(bytes.NewReader(data), &cheap, &frontier)
+	if err == nil {
+		result.Valid = true
+		result.Field = ""
+		return result
+	}
+	var field *recipeFieldError
+	if errors.As(err, &field) {
+		result.Field = field.field
+	}
+	return result
 }
