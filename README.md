@@ -230,3 +230,23 @@ response has `valid` and a fixed `field`: empty on success, or `recipe`,
 `-model`, `-output`, `-context`, `-capabilities` field on refusal. Raw errors and
 private configuration are never returned. This is a point-in-time recipe check,
 not input counting, a remaining allowance, save authorization or execution.
+
+### Container runtime pilot
+
+The final Conductor image uses Alpine 3.23 with the system CA certificates and
+one CGO-disabled executable. Go and compiler inputs remain in the build stage;
+the contract-test executable lives in a separate test Dockerfile and is mounted only
+for CI. The runtime remains UID/GID 65532, with `/var/lib/conductor` owned by that
+identity. Persistent deployments must supply writable state there when using a
+read-only root filesystem.
+
+The existing PR/main runtime job qualifies the actual Linux amd64 image with
+network disabled: command startup, static ELF linkage, system TLS roots,
+SQLite WAL writes/reopen and selected build-path/tool exclusions. It records
+installed packages and image size in the job summary. TLS root loading is not a
+live upstream connection check. Raw macOS/Windows builds are separate; no other
+container architecture is claimed by this pilot.
+
+The existing automatic moving TEST publication remains unchanged. This source
+change does not install a service or authorize production promotion. Other
+services and their shared dependency graphs remain under Infra #1857.
