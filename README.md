@@ -230,3 +230,37 @@ response has `valid` and a fixed `field`: empty on success, or `recipe`,
 `-model`, `-output`, `-context`, `-capabilities` field on refusal. Raw errors and
 private configuration are never returned. This is a point-in-time recipe check,
 not input counting, a remaining allowance, save authorization or execution.
+
+### New-task recipe allowance preview (disabled by default)
+
+`POST /v1/config/preview` is available only with recipe reload configured,
+`CONDUCTOR_RECIPE_PREVIEW_ENABLED=1`, and the existing `X-Conductor-Token`
+service authorization. Deployment configuration does not enable it. Send a JSON
+object with `recipe` (the proposed recipe document), `tier` (`cheap` or
+`frontier`), and `chat` (an OpenAI text/tool chat request). The entire envelope is
+limited to 64 KiB. Task identifiers and other envelope fields are rejected.
+
+The selected tier must have a configured non-Gateway vLLM tokenizer and the
+proposed recipe must specify a context limit. Provider credentials follow the
+existing credential-origin and provider-auth rules; the proxy token never goes
+to the tokenizer. This call sends the supplied chat to that configured tokenizer,
+but never generates, reserves tokens, reads an existing task balance, saves a
+draft or reloads the active recipe. Unsupported media/counting fails closed.
+
+A successful `hypermesh.conductor.recipe-preview.v1` response contains
+`scope: "new-task-before-review"` and `admitted: false`. It reports the counted
+input, candidate count, hypothetical aggregate input/output reservation,
+effective context capacity/headroom, and remaining **new-task** total/output
+allowances. Unconfigured task limits are explicit `null`, not zero. The recipe
+hash identifies the proposed bytes; it does not identify an installed revision.
+The calculation reuses runtime output bounds, provider translation and tokenizer
+checks. Context headroom is per candidate; task charges include all candidates.
+
+This is a preview of the submitted chat before prefixes, retrieval, compaction,
+AI review and other dispatch rewrites. It is neither an admission nor a promise
+of availability: final runtime checks and atomic reservations still decide a real
+request. It is not an existing-task balance, actual usage, price or charge.
+Invalid proposals return 422 with bounded field/refusal categories, malformed
+requests return 400/413, and unavailable tokenizer results return 503 without
+provider bodies or input text. All responses are `Cache-Control: no-store`.
+Portal consumption and tenant-scoped existing-task usage remain separate work.
