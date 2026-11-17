@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 )
 
 func submission() Submission {
@@ -116,6 +117,10 @@ func checkOneDispatch(t *testing.T, phone bool) {
 	calls := 0
 	h, err := New(*c, s.Tenant, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		scope := taskscope.From(r.Context())
+		if scope == nil || !scope.Owner.Valid() || scope.Task != s.Task || scope.Tenant != s.Tenant {
+			t.Error("authenticated task owner scope missing")
+		}
 		operationoutcome.Record(r.Context(), true)
 		if r.Header.Get("X-Conductor-Expected-Model") != s.Destination {
 			t.Error("destination not enforced")

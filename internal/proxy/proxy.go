@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 	"io"
 	"net"
 	"net/http"
@@ -348,6 +349,10 @@ func PromoteAuthenticatedConnection(w http.ResponseWriter, r *http.Request) bool
 
 // ServeHTTP implements the local API.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/tasks/usage" {
+		p.serveTaskUsage(w, r)
+		return
+	}
 	if r.URL.Path == "/v1/recipes/draft" {
 		p.serveDraft(w, r)
 		return
@@ -719,7 +724,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if accountingURL != "" {
 			attemptID = uuid.NewString()
 		}
-		ledger, reserveErr := reserveTokens(p.Journal.Path()+".output.sqlite", taskID, stepID, tier.RecipeDigest, tokenBudget{attemptID: attemptID, outputLimit: tier.TaskOutputLimit, totalLimit: tier.TaskTokenLimit, input: inputCharge, output: allowance.output})
+		ledger, reserveErr := reserveTokens(p.Journal.Path()+".output.sqlite", taskID, stepID, tier.RecipeDigest, tokenBudget{scope: taskscope.From(r.Context()), attemptID: attemptID, outputLimit: tier.TaskOutputLimit, totalLimit: tier.TaskTokenLimit, input: inputCharge, output: allowance.output})
 		if reserveErr != nil {
 			status, message := http.StatusServiceUnavailable, "task budget ledger unavailable"
 			if errors.Is(reserveErr, errTaskBudget) {
@@ -1095,7 +1100,7 @@ func (p *Proxy) finish(w http.ResponseWriter, client *http.Request, status int, 
 func (p *Proxy) recordDispatch(client *http.Request, record metrics.StepRecord) {
 	ledger, _ := client.Context().Value(budgetContextKey{}).(*sql.DB)
 	if ledger != nil && record.UsageStatus == metrics.StatusMeasured && record.OutputTokens != nil && *record.OutputTokens >= 0 && record.InputTokens != nil && *record.InputTokens >= 0 {
-		if _, err := ledger.Exec("UPDATE output_attempts SET charge=?, input_charge=? WHERE task=? AND step=?", *record.OutputTokens, *record.InputTokens, record.TaskID, record.StepID); err != nil {
+		if _, err := ledger.Exec("UPDATE output_attempts SET charge=?, input_charge=?, measured=1 WHERE task=? AND step=?", *record.OutputTokens, *record.InputTokens, record.TaskID, record.StepID); err != nil {
 			p.Logf("task budget reconciliation failed")
 		}
 	}

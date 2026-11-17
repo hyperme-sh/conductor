@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ var errTaskBudget = errors.New("task token allowance exhausted, recipe changed, 
 // One statement under SQLite's writer lock admits a fresh attempt. Unknown
 // outcomes retain the entire charge even when the caller or process disappears.
 type tokenBudget struct {
+	scope                   *taskscope.Binding
 	outputLimit, totalLimit int
 	input, output           int
 	attemptID               string
@@ -70,6 +72,18 @@ func admitAttempt(db *sql.DB, task, step, recipe string, b tokenBudget) error {
 			return err
 		}
 	}
+
+	if err := bindTaskOwner(tx, task, b); err != nil {
+		return err
+	}
+	if err := tx.QueryRow("SELECT count(*) FROM pragma_table_info('output_attempts') WHERE name='measured'").Scan(&present); err != nil {
+		return err
+	}
+	if present == 0 {
+		if _, err := tx.Exec("ALTER TABLE output_attempts ADD COLUMN measured INTEGER NOT NULL DEFAULT 0 CHECK(measured IN (0,1))"); err != nil {
+			return err
+		}
+	}
 	result, err := tx.Exec(`INSERT INTO output_attempts(task,step,recipe,charge,input_charge)
  SELECT ?,?,?,?,? WHERE (?=0 OR (SELECT COALESCE(SUM(charge),0) FROM output_attempts WHERE task=?) <= ?)
  AND (?=0 OR (SELECT COALESCE(SUM(charge+input_charge),0) FROM output_attempts WHERE task=?) <= ?)
@@ -99,3 +113,43 @@ func admitAttempt(db *sql.DB, task, step, recipe string, b tokenBudget) error {
 }
 
 type budgetContextKey struct{}
+
+// Ownership is immutable and committed with the first reservation. Old rows cannot
+// be adopted, and generic proxy credentials cannot append to an owned task.
+func bindTaskOwner(tx *sql.Tx, task string, b tokenBudget) error {
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS task_owners (
+ task TEXT PRIMARY KEY, tenant TEXT NOT NULL, organization TEXT NOT NULL, owner TEXT NOT NULL,
+ output_limit INTEGER NOT NULL, total_limit INTEGER NOT NULL) WITHOUT ROWID`); err != nil {
+		return err
+	}
+	var prior taskscope.Owner
+	var output, total int
+	err := tx.QueryRow("SELECT tenant,organization,owner,output_limit,total_limit FROM task_owners WHERE task=?", task).Scan(&prior.Tenant, &prior.Organization, &prior.Owner, &output, &total)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if b.scope == nil {
+		if err == nil {
+			return errTaskBudget
+		}
+		return nil
+	}
+	if !b.scope.Owner.Valid() || !taskscope.ValidID(task) || b.scope.Task != task {
+		return errTaskBudget
+	}
+	if err == nil {
+		if prior != b.scope.Owner || output != b.outputLimit || total != b.totalLimit {
+			return errTaskBudget
+		}
+		return nil
+	}
+	var count int
+	if err := tx.QueryRow("SELECT count(*) FROM output_attempts WHERE task=?", task).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return errTaskBudget
+	}
+	_, err = tx.Exec("INSERT INTO task_owners VALUES (?,?,?,?,?,?)", task, b.scope.Tenant, b.scope.Organization, b.scope.Owner.Owner, b.outputLimit, b.totalLimit)
+	return err
+}

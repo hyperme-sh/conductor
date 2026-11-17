@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 )
 
 const OperationTimeout = 300 * time.Second
@@ -269,7 +270,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Renewals only extend the short current-authority check inside the fixed
 	// five-minute operation bound. They never permit another dispatch.
 	body, _ := json.Marshal(map[string]any{"model": s.Destination, "messages": []map[string]string{{"role": "user", "content": s.Prompt}}, "max_tokens": s.MaxOutput})
-	local, _ := http.NewRequestWithContext(leaseCtx, "POST", "http://localhost/v1/chat/completions", bytes.NewReader(body))
+	local, _ := http.NewRequestWithContext(taskscope.With(leaseCtx, taskscope.Binding{Owner: taskscope.Owner{Tenant: fact.Tenant, Organization: fact.Organization, Owner: fact.Owner}, Task: fact.Task}), "POST", "http://localhost/v1/chat/completions", bytes.NewReader(body))
 	local.Header.Set("Content-Type", "application/json")
 	local.Header.Set("X-Conductor-Task", s.Task)
 	local.Header.Set("X-Conductor-Step", s.Operation)
