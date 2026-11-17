@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
 	"github.com/hyperme-sh/hypermesh-conductor/internal/config"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/routing"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/rules"
 )
 
 type recipeRuntime struct {
@@ -89,7 +92,7 @@ func (r *recipeRuntime) reload() error {
 }
 
 func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" {
+	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" {
 		p.recipes.active.Load().ServeHTTP(w, r)
 		return
 	}
@@ -111,12 +114,60 @@ func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := p.recipes.active.Load().Config
+	policyView := r.URL.Path == "/v1/config/policy"
+	if policyView {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	var policy rules.File
+	if policyView {
+		var err error
+		policy, err = rules.Load(cfg.RulesFile)
+		if err != nil {
+			writeJSON(w, 503, map[string]any{"error": "routing policy unavailable"})
+			return
+		}
+	}
 	result := map[string]any{}
 	for _, tier := range []config.Tier{cfg.Cheap, cfg.Frontier} {
 		if tier.Configured() {
 			result[tier.Name] = map[string]any{"model": tier.Model, "recipe_sha256": tier.RecipeDigest, "max_output_tokens": tier.OutputLimit,
 				"max_task_tokens": tier.TaskTokenLimit, "max_task_output_tokens": tier.TaskOutputLimit, "context_window_tokens": tier.ContextWindow}
+			if policyView {
+				row := result[tier.Name].(map[string]any)
+				row["required_capabilities"] = append([]string{}, tier.RequiredCapabilities...)
+				row["locality"] = tier.Locality
+			}
 		}
+	}
+	if policyView {
+		defaultClass := cfg.DefaultClass
+		if defaultClass == "" {
+			var err error
+			defaultClass, err = cfg.FallbackClass()
+			if err != nil {
+				writeJSON(w, 503, map[string]any{"error": "routing policy unavailable"})
+				return
+			}
+		}
+		classes := map[string]string{}
+		for class := range routing.DefaultTiers {
+			decision, err := routing.Route(class, "", rules.EffectiveClassTiers(cfg.ClassTiers, policy, class, 0))
+			if err != nil {
+				writeJSON(w, 503, map[string]any{"error": "routing policy unavailable"})
+				return
+			}
+			classes[class] = decision.Tier
+		}
+		thresholds := map[string]string{}
+		for class := range classes {
+			if limit, ok := policy.Routing.EscalateWhenPeakTokensAbove[class]; ok {
+				thresholds[class] = strconv.Itoa(limit)
+			}
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective-policy.v1", "tiers": result,
+			"routing": map[string]any{"default_class": defaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}})
+		return
 	}
 	writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective.v1", "tiers": result})
 }
