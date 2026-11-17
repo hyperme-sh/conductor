@@ -92,9 +92,12 @@ func (r *recipeRuntime) reload() error {
 }
 
 func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" {
+	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" {
 		p.recipes.active.Load().ServeHTTP(w, r)
 		return
+	}
+	if r.URL.Path == "/v1/config/models" {
+		w.Header().Set("Cache-Control", "no-store")
 	}
 	if err := authorizeProxy(r); err != nil {
 		writeJSON(w, 401, map[string]any{"error": "proxy authorization required"})
@@ -114,6 +117,10 @@ func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := p.recipes.active.Load().Config
+	if r.URL.Path == "/v1/config/models" {
+		writeJSON(w, 200, modelView(cfg))
+		return
+	}
 	policyView := r.URL.Path == "/v1/config/policy"
 	if policyView {
 		w.Header().Set("Cache-Control", "no-store")

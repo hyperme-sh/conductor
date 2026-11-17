@@ -205,3 +205,16 @@ are omitted. This is a point-in-time configuration view, not model discovery,
 a usage/allowance preview or an authorization grant. The old `/v1/config` and
 reload response remain unchanged for existing clients. No listener or feature
 activation is enabled by this endpoint.
+
+### Read-only model capability view
+
+Authenticated `GET /v1/config/models` returns `hypermesh.conductor.models.v1` with
+`tiers` keyed by cheap/frontier. Each configured tier with a valid capability
+record includes `model`, `runtime_revision`, `protocol`, `local`, `features`, and
+`configured_context_window_tokens`. The record must match the model, runtime and
+protocol used by dispatch. Missing/mismatched records are omitted; missing known
+features become `unknown`. The seven feature states are `verified`, `unknown` or
+`unsupported`. Context is configured policy, not independently measured capacity.
+The view uses existing proxy authorization, is uncacheable, and exposes no
+endpoint, credential name, recipe path or raw configuration. It does not enumerate
+unconfigured alternatives, perform new verification, or authorize execution.
