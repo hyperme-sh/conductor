@@ -178,3 +178,26 @@ func TestDraftResponseDoesNotHoldReloadLock(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestDraftSeparateAuthorizedScopesCannotReadEachOther(t *testing.T) {
+	p := setupDraft(t)
+	other := draftScope{testDraftScope.Organization, testDraftScope.Organization, "actor"}
+	otherToken := "another-dedicated-credential-000002"
+	t.Setenv("CONDUCTOR_RECIPE_TOKEN_OTHER", otherToken)
+	raw, _ := json.Marshal([]draftBinding{{testDraftScope, "CONDUCTOR_RECIPE_TOKEN_TEST"}, {other, "CONDUCTOR_RECIPE_TOKEN_OTHER"}})
+	t.Setenv("CONDUCTOR_RECIPE_BINDINGS", string(raw))
+	_, saved := draftCall(p, testDraftScope, "save", nil, testDraft, testDraftToken)
+	if code, result := draftCall(p, other, "read", nil, "", otherToken); code != 200 || result.Recipe != nil || result.Revision != nil {
+		t.Fatalf("scope leak: %d %+v", code, result)
+	}
+	if code, _ := draftCall(p, other, "save", saved.Revision, testDraft, otherToken); code != 409 {
+		t.Fatal("foreign revision accepted")
+	}
+	if code, _ := draftCall(p, other, "save", nil, testDraft, otherToken); code != 200 {
+		t.Fatal(code)
+	}
+	_, original := draftCall(p, testDraftScope, "read", nil, "", testDraftToken)
+	if *original.Revision != *saved.Revision {
+		t.Fatal("foreign write changed original")
+	}
+}
