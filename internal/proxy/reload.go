@@ -93,15 +93,19 @@ func (r *recipeRuntime) reload() error {
 }
 
 func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" && r.URL.Path != "/v1/config/validate" {
+	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" && r.URL.Path != "/v1/config/validate" && r.URL.Path != "/v1/config/preview" {
 		p.recipes.active.Load().ServeHTTP(w, r)
 		return
 	}
-	if r.URL.Path == "/v1/config/models" || r.URL.Path == "/v1/config/validate" {
+	if r.URL.Path == "/v1/config/models" || r.URL.Path == "/v1/config/validate" || r.URL.Path == "/v1/config/preview" {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	if err := authorizeProxy(r); err != nil {
 		writeJSON(w, 401, map[string]any{"error": "proxy authorization required"})
+		return
+	}
+	if r.URL.Path == "/v1/config/preview" {
+		p.recipes.active.Load().serveRecipePreview(w, r)
 		return
 	}
 	if r.URL.Path == "/v1/config/validate" {
