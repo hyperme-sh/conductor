@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/hyperme-sh/hypermesh-conductor/internal/config"
 )
@@ -142,5 +143,38 @@ func TestDraftDirectoryMustBePrivateAndNotLinked(t *testing.T) {
 	t.Setenv("CONDUCTOR_RECIPE_STORE_DIR", link)
 	if code, _ := draftCall(p, testDraftScope, "read", nil, "", testDraftToken); code != 503 {
 		t.Fatal(code)
+	}
+}
+
+// Response writing must never hold the configuration reload mutex.
+type draftDeadlineWriter struct {
+	*httptest.ResponseRecorder
+	p        *Proxy
+	t        *testing.T
+	deadline time.Time
+}
+
+func (w *draftDeadlineWriter) SetWriteDeadline(value time.Time) error { w.deadline = value; return nil }
+func (w *draftDeadlineWriter) Write(data []byte) (int, error) {
+	if w.deadline.IsZero() || time.Until(w.deadline) > 6*time.Second {
+		w.t.Fatal("missing bounded write deadline")
+	}
+	if !w.p.recipes.mu.TryLock() {
+		w.t.Fatal("response holds reload mutex")
+	}
+	w.p.recipes.mu.Unlock()
+	return w.ResponseRecorder.Write(data)
+}
+func TestDraftResponseDoesNotHoldReloadLock(t *testing.T) {
+	p := setupDraft(t)
+	p.EnableRecipeReload("")
+	body, _ := json.Marshal(map[string]any{"action": "read", "tenant_id": testDraftScope.Tenant, "organization_id": testDraftScope.Organization, "subject": testDraftScope.Subject})
+	r := httptest.NewRequest("POST", "/v1/recipes/draft", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Conductor-Recipe-Token", testDraftToken)
+	w := &draftDeadlineWriter{ResponseRecorder: httptest.NewRecorder(), p: p, t: t}
+	p.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal(w.Code)
 	}
 }

@@ -90,9 +90,13 @@ func draftAuthorized(scope draftScope, token string) bool {
 
 // This route never falls back to the general proxy credential or changes active config.
 func (p *Proxy) serveDraft(w http.ResponseWriter, r *http.Request) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
 	w.Header().Set("Cache-Control", "private, no-store")
 	result := draftResult{Schema: draftSchema, Outcome: "unavailable"}
-	refuse := func(status int) { closeNetworkConn(w); writeJSON(w, status, result) }
+	refuse := func(status int) {
+		closeNetworkConn(w)
+		writeJSON(w, status, draftResult{Schema: draftSchema, Outcome: "unavailable"})
+	}
 	if os.Getenv("CONDUCTOR_RECIPE_STORE_ENABLED") != "true" {
 		refuse(503)
 		return
@@ -142,8 +146,6 @@ func (p *Proxy) serveDraft(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	cfg := p.Config
 	if p.recipes != nil {
-		p.recipes.mu.Lock()
-		defer p.recipes.mu.Unlock()
 		cfg = p.recipes.active.Load().Config
 	}
 	if input.Action == "save" {

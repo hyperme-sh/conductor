@@ -37,7 +37,7 @@ validation `field`. Unavailable responses contain no parser/configuration text.
 Transport failure after submission is ambiguous: read before another save.
 
 SQLite transactions serialize cross-process comparisons and updates. A save
-validates against the active configuration snapshot under the reload lock, but
+validates against an immutable active configuration snapshot, but
 that configuration can change afterward; stored drafts must be revalidated before
 future use. No remaining allowance or actual usage is implied by saving.
 
