@@ -185,3 +185,23 @@ This authenticates the local transport. It does not create a Hypermesh login ses
 The [issue implementation map](docs/issue-map.md) distinguishes implemented paths,
 design contracts and remaining work. [Nightly process checks](docs/nightly.md)
 belong to the central Infra batch; PR CI runs unit and contract tests only.
+
+### Recipe policy inspection
+
+With recipe reload enabled, authenticated `GET /v1/config/policy` returns
+`hypermesh.conductor.effective-policy.v1`. It includes the existing tier models,
+recipe digests and limits, plus `required_capabilities` and declared `locality`
+(empty means unspecified). `routing` contains `default_class`, the effective
+base `class_tiers` after active rules override configuration, and
+`escalate_when_peak_tokens_above`. Thresholds are decimal strings to preserve
+integer precision. A request exceeding a threshold selects frontier under the
+existing routing rules. Missing tiers remain unavailable; a routing entry is
+not permission to bypass downstream policy or to select an alternative model.
+
+The read uses the same active rules loader as dispatch and refuses invalid
+policy with a bounded error. Only recognized class names are exported. Endpoint
+addresses, credential names, prompt prefixes, paths and free-form rule notes
+are omitted. This is a point-in-time configuration view, not model discovery,
+a usage/allowance preview or an authorization grant. The old `/v1/config` and
+reload response remain unchanged for existing clients. No listener or feature
+activation is enabled by this endpoint.
