@@ -201,3 +201,27 @@ func TestDraftSeparateAuthorizedScopesCannotReadEachOther(t *testing.T) {
 		t.Fatal("foreign write changed original")
 	}
 }
+
+// A refused header must not consume even one byte of an attacker-controlled body.
+type unreadDraftBody struct{ t *testing.T }
+
+func (b unreadDraftBody) Read([]byte) (int, error) {
+	b.t.Fatal("unauthorized draft body was read")
+	return 0, nil
+}
+func (b unreadDraftBody) Close() error { return nil }
+
+func TestDraftAuthenticatesBeforeReadingBody(t *testing.T) {
+	p := setupDraft(t)
+	for _, token := range []string{"", "unknown-general-proxy-token"} {
+		req := httptest.NewRequest("POST", "/v1/recipes/draft", nil)
+		req.Body = unreadDraftBody{t}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Conductor-Recipe-Token", token)
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		if rec.Code != 403 {
+			t.Fatalf("unauthorized status %d", rec.Code)
+		}
+	}
+}

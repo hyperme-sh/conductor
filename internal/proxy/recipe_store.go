@@ -62,30 +62,32 @@ func decodeDraft(data []byte, out any) error {
 	}
 	return nil
 }
-func draftAuthorized(scope draftScope, token string) bool {
+func draftCredentialScope(token string) (draftScope, bool) {
 	raw := os.Getenv("CONDUCTOR_RECIPE_BINDINGS")
 	if len(raw) > 65536 {
-		return false
+		return draftScope{}, false
 	}
 	var bindings []draftBinding
 	if decodeDraft([]byte(raw), &bindings) != nil || len(bindings) == 0 || len(bindings) > 64 {
-		return false
+		return draftScope{}, false
 	}
 	seen := map[string]bool{}
 	scopes := map[draftScope]bool{}
 	matches := 0
+	var scope draftScope
 	for _, b := range bindings {
 		secret := os.Getenv(b.TokenEnv)
 		if !validDraftScope(b.draftScope) || !draftTokenName.MatchString(b.TokenEnv) || len(secret) < 32 || len(secret) > 4096 || strings.IndexFunc(secret, func(r rune) bool { return r < 33 || r > 126 }) >= 0 || seen[secret] || scopes[b.draftScope] {
-			return false
+			return draftScope{}, false
 		}
 		seen[secret] = true
 		scopes[b.draftScope] = true
-		if b.draftScope == scope && subtle.ConstantTimeCompare([]byte(secret), []byte(token)) == 1 {
+		if subtle.ConstantTimeCompare([]byte(secret), []byte(token)) == 1 {
 			matches++
+			scope = b.draftScope
 		}
 	}
-	return matches == 1
+	return scope, matches == 1
 }
 
 // This route never falls back to the general proxy credential or changes active config.
@@ -109,6 +111,14 @@ func (p *Proxy) serveDraft(w http.ResponseWriter, r *http.Request) {
 		refuse(415)
 		return
 	}
+	scope, authorized := draftCredentialScope(r.Header.Get("X-Conductor-Recipe-Token"))
+	if !authorized {
+		refuse(403)
+		return
+	}
+	if !promoteNetworkConn(w, r) {
+		return
+	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 262144))
 	if err != nil {
 		refuse(413)
@@ -119,11 +129,8 @@ func (p *Proxy) serveDraft(w http.ResponseWriter, r *http.Request) {
 		refuse(400)
 		return
 	}
-	if !draftAuthorized(input.draftScope, r.Header.Get("X-Conductor-Recipe-Token")) {
+	if input.draftScope != scope {
 		refuse(403)
-		return
-	}
-	if !promoteNetworkConn(w, r) {
 		return
 	}
 	var expected *string
