@@ -116,7 +116,7 @@ jobs:
         run: docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" -t ghcr.io/hyperme-sh/conductor/runtime:test .
       - name: Runtime command contract
         run: |
-          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges ghcr.io/hyperme-sh/conductor/runtime:test version
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges ghcr.io/hyperme-sh/conductor/runtime:test --help
           test "$(docker image inspect ghcr.io/hyperme-sh/conductor/runtime:test --format '{{.Config.User}}')" = 65532:65532
       - name: Publish moving TEST runtime
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
