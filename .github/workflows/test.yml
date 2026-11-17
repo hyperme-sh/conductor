@@ -101,3 +101,30 @@ jobs:
         run: go test -race ./internal/cli -run "TestWindowsRejectsUnixParentWatchBeforeConfig|TestManaged|TestParent"
       - name: Local proxy contract
         run: go test -race ./internal/proxy -run "TestPrivatePipeHTTPAndShutdown|TestLocalShutdownRemovesSocketAndAllowsRestart"
+
+  runtime:
+    needs: test
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "linux", "x64", "debrunner"]') || 'ubuntu-24.04' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build TEST runtime
+        run: docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" -t ghcr.io/hyperme-sh/conductor/runtime:test .
+      - name: Runtime command contract
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges ghcr.io/hyperme-sh/conductor/runtime:test version
+          test "$(docker image inspect ghcr.io/hyperme-sh/conductor/runtime:test --format '{{.Config.User}}')" = 65532:65532
+      - name: Publish moving TEST runtime
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG=$(mktemp -d)
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push ghcr.io/hyperme-sh/conductor/runtime:test
