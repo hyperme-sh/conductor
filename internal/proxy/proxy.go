@@ -348,6 +348,10 @@ func PromoteAuthenticatedConnection(w http.ResponseWriter, r *http.Request) bool
 
 // ServeHTTP implements the local API.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/recipes/draft" {
+		p.serveDraft(w, r)
+		return
+	}
 	if p.recipes != nil {
 		p.serveRuntime(w, r)
 		return
