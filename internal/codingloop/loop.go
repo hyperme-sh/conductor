@@ -301,10 +301,18 @@ func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t ma
 	if e != nil {
 		return result, e
 	}
-	raw, _ := json.Marshal(files)
-	workspaceHash := digest(raw)
+	checks := []Check{}
+	for _, name := range run.Execution.Checks {
+		check, e := l.check(name)
+		if e != nil {
+			return result, e
+		}
+		checks = append(checks, check)
+	}
+	workspaceHash := checkSnapshotHash(files, checks, l.Options.UID)
 	result.WorkspaceSHA = workspaceHash
-	if run.CheckedWorkspace == workspaceHash {
+	reuse := run.CheckedWorkspace == workspaceHash
+	if reuse && run.CheckedOutcome != "passed" {
 		result.Feedback = "Workspace unchanged; checks were not repeated"
 		return result, nil
 	}
@@ -320,6 +328,10 @@ func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t ma
 		e = l.action(ctx, run, t, args, func(ctx context.Context) error {
 			if e := l.review(ctx, t, "check", name, args, false); e != nil {
 				return e
+			}
+			if reuse {
+				passed = true
+				return nil
 			}
 			var err error
 			executor := func(ctx context.Context, check Check, files []file) (string, bool, error) {
@@ -347,11 +359,22 @@ func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t ma
 	if e != nil {
 		return result, e
 	}
-	current, _ := json.Marshal(fresh)
-	if digest(current) != workspaceHash {
+	if checkSnapshotHash(fresh, checks, l.Options.UID) != workspaceHash {
 		result.Feedback = "Workspace changed while checks ran"
 		return result, nil
 	}
 	result.CheckOutcome = "passed"
+	if reuse {
+		result.Feedback = "Reused earlier passing checks for unchanged input"
+	}
 	return result, nil
+}
+
+func checkSnapshotHash(files []file, checks []Check, uid uint32) string {
+	raw, _ := json.Marshal(struct {
+		Files  []file
+		Checks []Check
+		UID    uint32
+	}{files, checks, uid})
+	return digest(raw)
 }

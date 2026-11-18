@@ -259,3 +259,40 @@ func TestSnapshotDescriptorsAreImmutable(t *testing.T) {
 		t.Fatal("snapshot changed", err)
 	}
 }
+
+func TestPassingCheckReuseStillVerifiesPolicyAndCheckDefinition(t *testing.T) {
+	l, run, target, _ := fixture(t)
+	first, err := l.Finish(t.Context(), run, target, output("new"))
+	if err != nil || first.CheckOutcome != "passed" {
+		t.Fatal(first, err)
+	}
+	run.CheckedWorkspace = first.WorkspaceSHA
+	run.CheckedOutcome = "passed"
+	checks, reviews := 0, 0
+	l.checkHook = func(context.Context, Check, []file) (string, bool, error) { checks++; return "", true, nil }
+	l.reviewHook = func(_ context.Context, _ machineingress.CodingTarget, op, _ string, _ any, _ bool) error {
+		if op == "check" {
+			reviews++
+		}
+		return nil
+	}
+	second, err := l.Finish(t.Context(), run, target, machineingress.CodingResult{Content: `{"edits":[]}`})
+	if err != nil || second.CheckOutcome != "passed" || checks != 0 || reviews != 1 {
+		t.Fatal(second, err, checks, reviews)
+	}
+	l.reviewHook = func(_ context.Context, _ machineingress.CodingTarget, op, _ string, _ any, _ bool) error {
+		if op == "check" {
+			return Err
+		}
+		return nil
+	}
+	if _, err = l.Finish(t.Context(), run, target, machineingress.CodingResult{Content: `{"edits":[]}`}); err == nil {
+		t.Fatal("policy denial bypassed by reuse")
+	}
+	l.reviewHook = func(context.Context, machineingress.CodingTarget, string, string, any, bool) error { return nil }
+	l.Options.Checks[0].Args = []string{"changed"}
+	third, err := l.Finish(t.Context(), run, target, machineingress.CodingResult{Content: `{"edits":[]}`})
+	if err != nil || third.CheckOutcome != "passed" || checks != 1 {
+		t.Fatal("changed check reused", third, err, checks)
+	}
+}

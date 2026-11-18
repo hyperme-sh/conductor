@@ -21,6 +21,7 @@ type CodingHooks interface {
 	Finish(context.Context, *ContinueRun, CodingTarget, CodingResult) (CodingResult, error)
 }
 type ContinueRun struct {
+	CheckedOutcome   string     `json:"checked_outcome"`
 	CheckedWorkspace string     `json:"checked_workspace_sha256"`
 	Execution        *Execution `json:"execution"`
 
