@@ -106,9 +106,15 @@ func TestPipeDescriptorRefusesBroadOrForeignAccess(t *testing.T) {
 	}
 }
 
-func TestPipeRejectsDefaultACLBeforeRequest(t *testing.T) {
+func TestPipeRejectsNonPrivateACLBeforeRequest(t *testing.T) {
 	path := testPipePath(t)
-	listener, err := winio.ListenPipe(path, nil)
+	owner, err := userSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := winio.ListenPipe(path, &winio.PipeConfig{
+		SecurityDescriptor: "O:" + owner.String() + "D:(A;;GA;;;WD)",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,15 +122,43 @@ func TestPipeRejectsDefaultACLBeforeRequest(t *testing.T) {
 	if ValidateListener(listener) == nil {
 		t.Fatal("accepted externally constructed listener")
 	}
-	// A client may close the pipe before the server's Accept returns it.
-	// The request boundary is whether DialContext hands back a usable connection.
-	conn, err := DialContext(context.Background(), path)
+
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == net.ErrClosed {
+			// The refused client can disconnect before Accept returns.
+			done <- nil
+			return
+		}
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			done <- err
+			return
+		}
+		n, err := conn.Read(make([]byte, 1))
+		if n != 0 || err != io.EOF {
+			done <- fmt.Errorf("expected disconnect without request bytes, got %d bytes: %v", n, err)
+			return
+		}
+		done <- nil
+	}()
+
+	conn, dialErr := DialContext(context.Background(), path)
 	if conn != nil {
 		conn.Close()
-		t.Fatal("returned a connection for the default ACL")
 	}
-	if err == nil {
-		t.Fatal("accepted default ACL")
+	// Unblock Accept before joining the observer. A timeout is not an ACL refusal.
+	listener.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if conn != nil || dialErr == nil || dialErr.Error() != "Conductor pipe grants another user access" {
+		t.Fatalf("expected non-private ACL refusal, got connection=%t, error=%v", conn != nil, dialErr)
 	}
 }
 
