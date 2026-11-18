@@ -140,3 +140,20 @@ jobs:
           fi
           docker tag ghcr.io/hyperme-sh/conductor/runtime:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT ghcr.io/hyperme-sh/conductor/runtime:test
           docker push ghcr.io/hyperme-sh/conductor/runtime:test
+
+  coding-sandbox-contract:
+    # Disposable public CI tests the kernel isolation boundary, never a lab host.
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - name: Install sandbox tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap python3
+      - name: Isolated filesystem and network unit contract
+        run: sudo env "PATH=$PATH" CONDUCTOR_SANDBOX_CONTRACT=1 go test ./internal/codingloop -run '^TestSandboxIsolatesFixture$' -count=1

@@ -34,6 +34,14 @@ type ServiceArguments struct {
 	ControllerHash string `json:"controller_binding_sha256"`
 }
 
+type CheckArguments struct {
+	Executable     string `json:"executable"`
+	ExecutableHash string `json:"executable_sha256"`
+	ArgvHash       string `json:"argv_sha256"`
+	WorkspaceHash  string `json:"workspace_sha256"`
+	Sandbox        string `json:"sandbox"`
+}
+
 func hash(v string) bool {
 	b, e := hex.DecodeString(v)
 	return e == nil && len(b) == 32 && strings.ToLower(v) == v
@@ -78,6 +86,10 @@ func validTyped(p Request) bool {
 	}
 	raw := []byte(a.ArgumentsJSON)
 	switch a.Operation {
+	case "check":
+		var args CheckArguments
+		return decode(raw, &args) == nil && canonicalFile(args.Executable) && hash(args.ExecutableHash) && hash(args.ArgvHash) && hash(args.WorkspaceHash) && args.Sandbox == "linux-bwrap-no-network" && regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`).MatchString(a.Target)
+
 	case "https":
 		var args HTTPSArguments
 		if decode(raw, &args) != nil || args.Method != "GET" && args.Method != "POST" || !hash(args.BodyHash) || args.BodyBytes > a.Limits.Bytes || len(args.Addresses) < 1 || len(args.Addresses) > 16 {

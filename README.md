@@ -264,3 +264,42 @@ Invalid proposals return 422 with bounded field/refusal categories, malformed
 requests return 400/413, and unavailable tokenizer results return 503 without
 provider bodies or input text. All responses are `Cache-Control: no-store`.
 Portal consumption and tenant-scoped existing-task usage remain separate work.
+
+### Bounded edit/check/repair tasks
+
+Visor can start an edit task with explicit existing project files, named checks,
+up to three repairs, and time, token, and monetary limits. Conductor reads only
+those files after current AIuditor admission. The model returns structured edits,
+never executable commands. Edits require the original content hash, single-link
+regular files owned by the configured user, and fresh write admission. A changed
+file stops the attempt. Failed checks retain the edits and return bounded output
+for the next repair. Uncertain actions stop without replay. Unchanged workspace
+checks are not repeated.
+
+The current Linux executor accepts at most twelve text files and 10 KB combined.
+Checks use a root-managed Host catalog: `name`, canonical `/usr/` `executable`,
+its `sha256`, and fixed `args`. They run through `/usr/bin/bwrap` in a new network,
+PID, user, and mount namespace with no ambient credentials, read-only system
+paths, and only a temporary copy of selected files. A check cannot publish its
+scratch files back to the project. Check execution is bounded by current policy,
+owner consent, and a 20-second timeout. Configure short unit or contract checks;
+shared-resource suites remain CI-owned. AIuditor `check` rules bind the executable
+hash, arguments hash, and workspace snapshot. Missing sandbox tools or authority
+refuse execution rather than falling back to unrestricted processes.
+
+`spend_price_bounds` is a configuration map keyed by tier name. Each entry has
+`currency` (uppercase ISO code), `model`, exact `endpoint`, `source`, Unix
+`expires_at`, integer `input_micros_per_million`, `output_micros_per_million`, and
+`fixed_micros`. These must be operator-confirmed upper bounds for the configured
+route, including applicable request overhead; they are not estimated cost proxy
+rates. One million currency millionths equals one currency unit. Missing,
+expired, mismatched prices or unavailable counted input stop capped dispatch.
+Capped dispatch requires a configured context window and output ceiling. Plane
+reserves their rounded-up maximum before any remote review, token counting, or
+generation, including each fallback attempt. The fixed bound must cover all
+review and counting overhead. Policy may deny the funded route but cannot switch
+it to an unfunded route; rewritten requests must fit the reserved bound. Auxiliary
+compaction and notes calls are skipped for capped tasks. Uncertain outcomes retain the full reservation. Displayed
+reserved maxima are conservative spending limits, not invoices or refunds.
+Old response-only tasks retain their previous contract; new edit tasks require a
+monetary cap. No release, deployment, or billing-account activation is implied.

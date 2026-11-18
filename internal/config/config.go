@@ -5,8 +5,10 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/spendlimit"
 	"net"
 	"net/url"
 	"os"
@@ -180,6 +182,7 @@ type AIU struct {
 
 // Config is the process configuration.
 type Config struct {
+	SpendPrices         map[string]spendlimit.Price
 	Captures            map[string]Tier
 	RefusalFallbackTier string
 	MaxRefusalAttempts  int
@@ -321,6 +324,22 @@ func Load(path string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	prices := map[string]spendlimit.Price{}
+	if value, ok := raw["spend_price_bounds"]; ok {
+		encoded, e := json.Marshal(value)
+		if e != nil || func() error {
+			d := json.NewDecoder(bytes.NewReader(encoded))
+			d.DisallowUnknownFields()
+			return d.Decode(&prices)
+		}() != nil {
+			return Config{}, fmt.Errorf("invalid spend_price_bounds")
+		}
+		for _, price := range prices {
+			if !price.Valid() {
+				return Config{}, fmt.Errorf("invalid spend price bound")
+			}
+		}
+	}
 	listen, _ := raw["listen"].(string)
 	if listen == "" {
 		listen = DefaultListen
@@ -393,6 +412,7 @@ func Load(path string) (Config, error) {
 		Prefix:       built,
 		ClassTiers:   classTiers,
 		CostRates:    rates,
+		SpendPrices:  prices,
 		AIU:          aiu,
 		Compaction:   compaction,
 		RulesFile:    rulesFile,

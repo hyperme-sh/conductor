@@ -9,6 +9,7 @@ import (
 	"github.com/hyperme-sh/hypermesh-conductor/internal/aiuditor"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/config"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/routing"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/spendlimit"
 )
 
 func (p *Proxy) productionReview() bool {
@@ -75,7 +76,8 @@ func (p *Proxy) reviewChoice(r *http.Request, proto string, prepared []byte, str
 	candidates := []config.Tier{selected}
 	_, captured := r.Context().Value(captureKey{}).(config.Tier)
 	retry, _ := r.Context().Value(refusalKey{}).(refusalState)
-	if !captured && retry.nextTier == "" {
+	_, moneyLimited := spendlimit.From(r.Context())
+	if !captured && !moneyLimited && retry.nextTier == "" {
 		for _, other := range []config.Tier{p.Config.Cheap, p.Config.Frontier} {
 			if other.Configured() && other.Model != selected.Model {
 				candidates = append(candidates, other)
