@@ -269,6 +269,19 @@ func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t ma
 	if total > 10000 {
 		return result, nil
 	}
+	projected := append([]file(nil), files...)
+	for i := range projected {
+		for _, change := range response.Edits {
+			if projected[i].Path == change.Path {
+				projected[i].Content = change.Content
+				projected[i].Hash = digest([]byte(change.Content))
+			}
+		}
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil || len(encoded) > 16000 {
+		return result, nil
+	}
 	for _, change := range response.Edits {
 		if change.Content == originals[change.Path].Content {
 			continue

@@ -228,3 +228,15 @@ func TestWorkExpiryCancelsWhileRenewalStalls(t *testing.T) {
 		t.Fatal("renewal was not pending")
 	}
 }
+
+func TestProjectedSerializedWorkspaceRefusesBeforeMutation(t *testing.T) {
+	l, run, target, path := fixture(t)
+	result, err := l.Finish(t.Context(), run, target, output(strings.Repeat("\\", 9000)))
+	if err != nil || result.CheckOutcome != "needs-input" {
+		t.Fatal(result, err)
+	}
+	raw, _ := os.ReadFile(path)
+	if string(raw) != "old" {
+		t.Fatal("unreadable projected context written")
+	}
+}
