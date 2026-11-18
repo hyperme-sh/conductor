@@ -55,9 +55,12 @@ func TestContinueUsesOwnerStateAcrossTwoChunksAndStops(t *testing.T) {
 	}))
 	defer server.Close()
 	c := Client{Origin: server.URL, HTTP: server.Client()}
-	execute := func(context.Context) (CodingResult, error) {
+	execute := func(_ context.Context, expected string) (CodingResult, error) {
 		calls++
-		return CodingResult{Version: 1, Task: *run.Current, State: "output-observed", OutputSHA: strings.Repeat("a", 64)}, nil
+		if expected != *run.Current {
+			t.Fatal("selected task not bound before execution")
+		}
+		return CodingResult{Version: 1, Task: *run.Current, State: "output-observed", OutputSHA: strings.Repeat("a", 64), CheckOutcome: "passed"}, nil
 	}
 	for i := 0; i < 3; i++ {
 		_, e := c.continueCoding(t.Context(), "hm_msi_test", target, execute)

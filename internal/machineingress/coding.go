@@ -23,10 +23,11 @@ type CodingTarget struct {
 	MaxOutput   int    `json:"max_output_tokens"`
 }
 type CodingResult struct {
-	Version   int    `json:"version"`
-	Task      string `json:"task_id,omitempty"`
-	State     string `json:"state"`
-	OutputSHA string `json:"output_sha256,omitempty"`
+	CheckOutcome string `json:"-"`
+	Version      int    `json:"version"`
+	Task         string `json:"task_id,omitempty"`
+	State        string `json:"state"`
+	OutputSHA    string `json:"output_sha256,omitempty"`
 }
 
 func sameIdentity(a, b Fact) bool {
@@ -36,9 +37,12 @@ func sameIdentity(a, b Fact) bool {
 // RunCoding consumes at most one already-admitted task. A lost response is never
 // retried. Model output is metadata only and cannot schedule additional actions.
 func (c Client) RunCoding(ctx context.Context, token, socket string, target CodingTarget) (CodingResult, error) {
-	return c.runCoding(ctx, token, target, func(ctx context.Context, raw []byte) (json.RawMessage, error) { return Submit(ctx, socket, token, raw) })
+	return c.runSelectedCoding(ctx, token, target, "", func(ctx context.Context, raw []byte) (json.RawMessage, error) { return Submit(ctx, socket, token, raw) })
 }
 func (c Client) runCoding(ctx context.Context, token string, target CodingTarget, submit func(context.Context, []byte) (json.RawMessage, error)) (CodingResult, error) {
+	return c.runSelectedCoding(ctx, token, target, "", submit)
+}
+func (c Client) runSelectedCoding(ctx context.Context, token string, target CodingTarget, expected string, submit func(context.Context, []byte) (json.RawMessage, error)) (CodingResult, error) {
 	if len(target.Workspace) < 2 || len(target.Workspace) > 4096 || strings.ContainsAny(target.Workspace, "\x00\r\n") || target.Class == "" || target.Destination == "" || target.MaxOutput < 1 || target.MaxOutput > 32768 {
 		return CodingResult{}, refused
 	}
@@ -47,7 +51,14 @@ func (c Client) runCoding(ctx context.Context, token string, target CodingTarget
 		return CodingResult{}, e
 	}
 	nonce := uuid.NewString()
-	body, _ := json.Marshal(map[string]any{"version": 1, "request_id": nonce, "device_id": target.Device, "assignment_id": target.Assignment, "session_id": target.Session, "workspace": target.Workspace})
+	claimBody := map[string]any{"version": 1, "request_id": nonce, "device_id": target.Device, "assignment_id": target.Assignment, "session_id": target.Session, "workspace": target.Workspace}
+	if expected != "" {
+		if !canonicalID(expected) {
+			return CodingResult{}, refused
+		}
+		claimBody["task_id"] = expected
+	}
+	body, _ := json.Marshal(claimBody)
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(callCtx, "POST", strings.TrimRight(c.Origin, "/")+"/api/v1/hypermesh/bots/"+target.Bot+"/machine/coding-claim", bytes.NewReader(body))
@@ -95,7 +106,7 @@ func (c Client) runCoding(ctx context.Context, token string, target CodingTarget
 	}
 	t := claim.Task
 	p := t.Payload
-	if !canonicalID(t.ID) || t.Assignment != target.Assignment || t.Session != target.Session || t.Capability != "coding" || t.Status != "delivered" || p.Version != 1 || p.Workspace != target.Workspace || p.Device != target.Device {
+	if (expected != "" && t.ID != expected) || !canonicalID(t.ID) || t.Assignment != target.Assignment || t.Session != target.Session || t.Capability != "coding" || t.Status != "delivered" || p.Version != 1 || p.Workspace != target.Workspace || p.Device != target.Device {
 		return CodingResult{}, refused
 	}
 	original, e := base64.StdEncoding.DecodeString(p.Submission)
@@ -117,6 +128,7 @@ func (c Client) runCoding(ctx context.Context, token string, target CodingTarget
 	}
 	var completion struct {
 		Choices []struct {
+			Finish  string `json:"finish_reason"`
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
@@ -127,6 +139,13 @@ func (c Client) runCoding(ctx context.Context, token string, target CodingTarget
 	}
 	digest := sha256.Sum256(output)
 	result.OutputSHA = hex.EncodeToString(digest[:])
-	result.State = "output-observed"
+	result.CheckOutcome = "needs-input"
+	if completion.Choices[0].Finish == "stop" {
+		result.State = "output-observed"
+		result.CheckOutcome = "passed"
+	}
+	if completion.Choices[0].Finish == "length" {
+		result.CheckOutcome = "limit"
+	}
 	return result, nil
 }

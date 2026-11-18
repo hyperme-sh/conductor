@@ -112,9 +112,11 @@ func (c Client) continueCall(ctx context.Context, token string, target CodingTar
 // All state and selected-task ownership remain in Plane; process restart cannot
 // reset pause, budgets or a consumed operation. There are no execution retries.
 func (c Client) ContinueCoding(ctx context.Context, token, socket string, target CodingTarget) (CodingResult, error) {
-	return c.continueCoding(ctx, token, target, func(ctx context.Context) (CodingResult, error) { return c.RunCoding(ctx, token, socket, target) })
+	return c.continueCoding(ctx, token, target, func(ctx context.Context, expected string) (CodingResult, error) {
+		return c.runSelectedCoding(ctx, token, target, expected, func(ctx context.Context, raw []byte) (json.RawMessage, error) { return Submit(ctx, socket, token, raw) })
+	})
 }
-func (c Client) continueCoding(ctx context.Context, token string, target CodingTarget, execute func(context.Context) (CodingResult, error)) (CodingResult, error) {
+func (c Client) continueCoding(ctx context.Context, token string, target CodingTarget, execute func(context.Context, string) (CodingResult, error)) (CodingResult, error) {
 	run, e := c.continueCall(ctx, token, target, "state", nil)
 	if e != nil {
 		return CodingResult{}, e
@@ -137,7 +139,11 @@ func (c Client) continueCoding(ctx context.Context, token string, target CodingT
 			}
 		}
 	}
-	result, e := execute(ctx)
+	expected := ""
+	if run != nil && run.Current != nil {
+		expected = *run.Current
+	}
+	result, e := execute(ctx, expected)
 	if e != nil {
 		return result, e
 	}
@@ -145,8 +151,8 @@ func (c Client) continueCoding(ctx context.Context, token string, target CodingT
 		if run.Current == nil || result.Task != *run.Current {
 			return CodingResult{}, refused
 		}
-		if result.State == "output-observed" {
-			_, e = c.continueCall(ctx, token, target, "record", map[string]any{"run_id": run.ID, "chunk_id": result.Task, "outcome": "passed", "output_sha256": result.OutputSHA})
+		if result.OutputSHA != "" && result.CheckOutcome != "" {
+			_, e = c.continueCall(ctx, token, target, "record", map[string]any{"run_id": run.ID, "chunk_id": result.Task, "outcome": result.CheckOutcome, "output_sha256": result.OutputSHA})
 			if e != nil {
 				result.State = "unknown"
 				result.OutputSHA = ""

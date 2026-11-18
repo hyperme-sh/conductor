@@ -16,7 +16,7 @@ import (
 )
 
 func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
-	for _, scenario := range []string{"success", "wrong-workspace", "wrong-owner", "wrong-route", "lost-output", "cancelled", "idle"} {
+	for _, scenario := range []string{"success", "truncated", "wrong-selected", "wrong-workspace", "wrong-owner", "wrong-route", "lost-output", "cancelled", "idle"} {
 		t.Run(scenario, func(t *testing.T) {
 			s := submission()
 			target := CodingTarget{Binding: s.Binding, Workspace: "/project", Class: s.Class, Destination: s.Destination, MaxOutput: s.MaxOutput}
@@ -63,7 +63,11 @@ func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
 			}))
 			defer server.Close()
 			c := Client{Origin: server.URL, HTTP: server.Client()}
-			result, e := c.runCoding(t.Context(), "hm_msi_test", target, func(ctx context.Context, raw []byte) (json.RawMessage, error) {
+			expected := ""
+			if scenario == "wrong-selected" {
+				expected = uuid.NewString()
+			}
+			result, e := c.runSelectedCoding(t.Context(), "hm_msi_test", target, expected, func(ctx context.Context, raw []byte) (json.RawMessage, error) {
 				dispatches++
 				if string(raw) != string(original) {
 					t.Error("original changed")
@@ -71,7 +75,10 @@ func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
 				if scenario == "lost-output" || scenario == "cancelled" {
 					return nil, io.ErrUnexpectedEOF
 				}
-				return json.RawMessage(`{"choices":[{"message":{"content":"answer"}}]}`), nil
+				if scenario == "truncated" {
+					return json.RawMessage(`{"choices":[{"finish_reason":"length","message":{"content":"partial"}}]}`), nil
+				}
+				return json.RawMessage(`{"choices":[{"finish_reason":"stop","message":{"content":"answer"}}]}`), nil
 			})
 			if strings.HasPrefix(scenario, "wrong-") {
 				if e == nil || dispatches != 0 {
@@ -95,6 +102,8 @@ func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
 				if result.State != "output-observed" || len(result.OutputSHA) != 64 {
 					t.Fatal(result)
 				}
+			} else if scenario == "truncated" && result.CheckOutcome != "limit" {
+				t.Fatal(result)
 			} else if result.State != "unknown" {
 				t.Fatal(result)
 			}
