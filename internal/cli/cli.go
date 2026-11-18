@@ -361,6 +361,10 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		defer listener.Close()
+		if *dreamSocket != "" && !dreamListenerAllowed(listener.Addr()) {
+			fmt.Fprintln(stderr, "permission dreaming requires a protected Unix listener")
+			return 2
+		}
 		if _, local := listener.Addr().(*net.UnixAddr); local {
 			if cfg.ListenMode == config.ListenModeNetwork {
 				fmt.Fprintln(stderr, "inherited Unix listener cannot use network mode")
@@ -901,3 +905,5 @@ func writePretty(stdout io.Writer, payload any) int {
 	}
 	return 0
 }
+
+func dreamListenerAllowed(address net.Addr) bool { _, local := address.(*net.UnixAddr); return local }
