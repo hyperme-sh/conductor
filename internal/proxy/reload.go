@@ -190,8 +190,20 @@ func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective-policy.v1", "tiers": result,
-			"routing": map[string]any{"default_class": defaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}})
+		view := map[string]any{"schema": "hypermesh.conductor.effective-policy.v1", "tiers": result,
+			"routing": map[string]any{"default_class": defaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}}
+		if r.Header.Get("X-Conductor-Policy-View") == "conditional-alternatives.v1" {
+			alternatives := []map[string]string{}
+			for _, tier := range []config.Tier{cfg.Cheap, cfg.Frontier} {
+				if next, eligible := refusalAlternative(cfg, tier, 1); tier.Configured() && eligible {
+					alternatives = append(alternatives, map[string]string{
+						"from_tier": tier.Name, "to_tier": next.Name, "condition": "upstream-refusal",
+					})
+				}
+			}
+			view["conditional_alternatives"] = alternatives
+		}
+		writeJSON(w, 200, view)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective.v1", "tiers": result})
