@@ -42,6 +42,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "machine-context", "machine-prompt":
 		return machinePromptCmd(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "coding-run":
+		return codingRunCmd(args[1:], os.Stdin, stdout, stderr)
 	case "permission-dream":
 		return accessReviewCmd("dream", args[1:], os.Stdin, stdout, stderr)
 	case "permission-action-admit":
