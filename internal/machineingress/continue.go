@@ -12,6 +12,7 @@ import (
 )
 
 type ContinueRun struct {
+	Generation int     `json:"worker_generation"`
 	ID         string  `json:"id"`
 	Revision   int     `json:"revision"`
 	Continue   bool    `json:"continue_enabled"`
@@ -101,7 +102,7 @@ func (c Client) continueCall(ctx context.Context, token string, target CodingTar
 	if json.Unmarshal(raw, &result) != nil {
 		return nil, refused
 	}
-	if result.Run != nil && (!canonicalID(result.Run.ID) || result.Run.Revision < 1 || result.Run.Workspace != target.Workspace || result.Run.Assignment != target.Assignment || len(result.Run.Chunks) > 16) {
+	if result.Run != nil && (!canonicalID(result.Run.ID) || result.Run.Revision < 1 || result.Run.Generation < 0 || result.Run.Generation > 17 || result.Run.Workspace != target.Workspace || result.Run.Assignment != target.Assignment || len(result.Run.Chunks) > 16) {
 		return nil, refused
 	}
 	return result.Run, nil
@@ -112,11 +113,11 @@ func (c Client) continueCall(ctx context.Context, token string, target CodingTar
 // All state and selected-task ownership remain in Plane; process restart cannot
 // reset pause, budgets or a consumed operation. There are no execution retries.
 func (c Client) ContinueCoding(ctx context.Context, token, socket string, target CodingTarget) (CodingResult, error) {
-	return c.continueCoding(ctx, token, target, func(ctx context.Context, expected string) (CodingResult, error) {
-		return c.runSelectedCoding(ctx, token, target, expected, func(ctx context.Context, raw []byte) (json.RawMessage, error) { return Submit(ctx, socket, token, raw) })
+	return c.continueCoding(ctx, token, target, func(ctx context.Context, expected string, generation int) (CodingResult, error) {
+		return c.runSelectedCodingGeneration(ctx, token, target, expected, generation, func(ctx context.Context, raw []byte) (json.RawMessage, error) { return Submit(ctx, socket, token, raw) })
 	})
 }
-func (c Client) continueCoding(ctx context.Context, token string, target CodingTarget, execute func(context.Context, string) (CodingResult, error)) (CodingResult, error) {
+func (c Client) continueCoding(ctx context.Context, token string, target CodingTarget, execute func(context.Context, string, int) (CodingResult, error)) (CodingResult, error) {
 	run, e := c.continueCall(ctx, token, target, "state", nil)
 	if e != nil {
 		return CodingResult{}, e
@@ -143,7 +144,11 @@ func (c Client) continueCoding(ctx context.Context, token string, target CodingT
 	if run != nil && run.Current != nil {
 		expected = *run.Current
 	}
-	result, e := execute(ctx, expected)
+	generation := 0
+	if run != nil {
+		generation = run.Generation
+	}
+	result, e := execute(ctx, expected, generation)
 	if e != nil {
 		return result, e
 	}
