@@ -283,7 +283,10 @@ PID, user, and mount namespace with no ambient credentials, read-only system
 paths, and only a temporary copy of selected files. A check cannot publish its
 scratch files back to the project. Check execution is bounded by current policy,
 owner consent, and a 20-second timeout. Configure short unit or contract checks;
-shared-resource suites remain CI-owned. AIuditor `check` rules bind the executable
+Checks are single-process, with a read-only source snapshot, a 16 MiB temporary
+filesystem, 256 MiB address-space and 15-second CPU limits. Child-process and
+thread creation are refused, so choose compatible named checks. Shared-resource
+suites remain CI-owned. AIuditor `check` rules bind the executable
 hash, arguments hash, and workspace snapshot. Missing sandbox tools or authority
 refuse execution rather than falling back to unrestricted processes.
 

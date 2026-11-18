@@ -143,7 +143,17 @@ func TestSandboxIsolatesFixture(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside")
 	os.WriteFile(outside, []byte("private fixture"), 0600)
 	t.Setenv("CONDUCTOR_PRIVATE_FIXTURE", "must not cross sandbox")
-	code := `import os,socket
+	code := `import os,socket,resource
+assert resource.getrlimit(resource.RLIMIT_AS) == (268435456,268435456)
+assert resource.getrlimit(resource.RLIMIT_CPU) == (15,15)
+try:
+ os.fork()
+ raise AssertionError("child process permitted")
+except OSError: pass
+try:
+ open("file.py","w")
+ raise AssertionError("source snapshot writable")
+except OSError: pass
 assert not os.path.exists(` + fmt.Sprintf("%q", outside) + `)
 assert 'CONDUCTOR_PRIVATE_FIXTURE' not in os.environ
 assert open('file.py').read() == 'fixture'

@@ -5,12 +5,14 @@ package codingloop
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -195,7 +197,7 @@ func trustedBinary(path, hash string) error {
 	return nil
 }
 func runCheck(ctx context.Context, check Check, files []file) (string, bool, error) {
-	if trustedBinary(check.Executable, check.SHA256) != nil || trustedBinary("/usr/bin/bwrap", "") != nil {
+	if trustedBinary(check.Executable, check.SHA256) != nil || trustedBinary("/usr/bin/bwrap", "") != nil || trustedBinary("/usr/bin/prlimit", "") != nil {
 		return "", false, Err
 	}
 	root, e := os.MkdirTemp("", "conductor-check-")
@@ -212,17 +214,24 @@ func runCheck(ctx context.Context, check Check, files []file) (string, bool, err
 			return "", false, Err
 		}
 	}
-	args := []string{"--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv"}
+	filter, e := processFilter()
+	if e != nil {
+		return "", false, e
+	}
+	defer filter.Close()
+	args := []string{"--seccomp", "3", "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv"}
 	for _, path := range []string{"/usr", "/bin", "/lib", "/lib64"} {
 		if _, e := os.Stat(path); e == nil {
 			args = append(args, "--ro-bind", path, path)
 		}
 	}
-	args = append(args, "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", root, "/workspace", "--chdir", "/workspace", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", "/tmp", "--", check.Executable)
+	args = append(args, "--proc", "/proc", "--dev", "/dev", "--size", "16777216", "--tmpfs", "/tmp", "--ro-bind", root, "/workspace", "--chdir", "/workspace", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", "/tmp", "--", check.Executable)
 	args = append(args, check.Args...)
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/usr/bin/bwrap", args...)
+	limits := []string{"--as=268435456:268435456", "--cpu=15:15", "--fsize=16777216:16777216", "--nofile=64:64", "--", "/usr/bin/bwrap"}
+	cmd := exec.CommandContext(ctx, "/usr/bin/prlimit", append(limits, args...)...)
+	cmd.ExtraFiles = []*os.File{filter}
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 	cmd.WaitDelay = time.Second
 	output := &bounded{}
@@ -243,4 +252,42 @@ func runCheck(ctx context.Context, check Check, files []file) (string, bool, err
 		return text, false, nil
 	}
 	return "", false, Err
+}
+
+// Checks are single-process: a process namespace alone cannot bound a fork bomb.
+// The architecture guard also prevents switching syscall ABIs to evade the filter.
+func processFilter() (*os.File, error) {
+	var arch uint32
+	var denied []uint32
+	switch runtime.GOARCH {
+	case "amd64":
+		arch = 0xc000003e
+		denied = []uint32{56, 57, 58, 435}
+	case "arm64":
+		arch = 0xc00000b7
+		denied = []uint32{220, 435}
+	default:
+		return nil, Err
+	}
+	filters := []unix.SockFilter{{Code: 0x20, K: 4}, {Code: 0x15, Jt: 1, K: arch}, {Code: 0x06, K: 0x80000000}, {Code: 0x20, K: 0}}
+	// Reject x32 and any unsupported high syscall number as well.
+	filters = append(filters, unix.SockFilter{Code: 0x35, Jf: 1, K: 0x40000000}, unix.SockFilter{Code: 0x06, K: 0x00050001})
+	for _, nr := range denied {
+		filters = append(filters, unix.SockFilter{Code: 0x15, Jf: 1, K: nr}, unix.SockFilter{Code: 0x06, K: 0x00050001})
+	}
+	filters = append(filters, unix.SockFilter{Code: 0x06, K: 0x7fff0000})
+	fd, e := unix.MemfdCreate("check-filter", unix.MFD_CLOEXEC)
+	if e != nil {
+		return nil, Err
+	}
+	f := os.NewFile(uintptr(fd), "check-filter")
+	if binary.Write(f, binary.LittleEndian, filters) != nil {
+		f.Close()
+		return nil, Err
+	}
+	if _, e = f.Seek(0, 0); e != nil {
+		f.Close()
+		return nil, Err
+	}
+	return f, nil
 }
