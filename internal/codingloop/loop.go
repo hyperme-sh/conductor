@@ -309,7 +309,9 @@ func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t ma
 				return e
 			}
 			var err error
-			executor := runCheck
+			executor := func(ctx context.Context, check Check, files []file) (string, bool, error) {
+				return runCheck(ctx, check, files, l.Options.UID)
+			}
 			if l.checkHook != nil {
 				executor = l.checkHook
 			}

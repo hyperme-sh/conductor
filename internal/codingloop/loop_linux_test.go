@@ -144,6 +144,7 @@ func TestSandboxIsolatesFixture(t *testing.T) {
 	os.WriteFile(outside, []byte("private fixture"), 0600)
 	t.Setenv("CONDUCTOR_PRIVATE_FIXTURE", "must not cross sandbox")
 	code := `import os,socket,resource
+assert os.getuid() != 0
 assert resource.getrlimit(resource.RLIMIT_AS) == (268435456,268435456)
 assert resource.getrlimit(resource.RLIMIT_CPU) == (15,15)
 try:
@@ -167,7 +168,11 @@ try:
  raise AssertionError('network reachable')
 except OSError: pass
 print('isolated fixture checked')`
-	output, passed, e := runCheck(context.Background(), Check{Executable: executable, SHA256: digest(binary), Args: []string{"-c", code}}, []file{{Path: "file.py", Content: "fixture"}})
+	uid := uint32(os.Geteuid())
+	if uid == 0 {
+		uid = 65534
+	}
+	output, passed, e := runCheck(context.Background(), Check{Executable: executable, SHA256: digest(binary), Args: []string{"-c", code}}, []file{{Path: "file.py", Content: "fixture"}}, uid)
 	if e != nil || !passed {
 		t.Fatalf("sandbox: %s %v", output, e)
 	}

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -196,7 +197,10 @@ func trustedBinary(path, hash string) error {
 	}
 	return nil
 }
-func runCheck(ctx context.Context, check Check, files []file) (string, bool, error) {
+func runCheck(ctx context.Context, check Check, files []file, uid uint32) (string, bool, error) {
+	if uid == 0 || (os.Geteuid() != 0 && uint32(os.Geteuid()) != uid) {
+		return "", false, Err
+	}
 	if trustedBinary(check.Executable, check.SHA256) != nil || trustedBinary("/usr/bin/bwrap", "") != nil || trustedBinary("/usr/bin/prlimit", "") != nil {
 		return "", false, Err
 	}
@@ -205,12 +209,25 @@ func runCheck(ctx context.Context, check Check, files []file) (string, bool, err
 		return "", false, e
 	}
 	defer os.RemoveAll(root)
+	if os.Geteuid() == 0 && os.Chown(root, int(uid), int(uid)) != nil {
+		return "", false, Err
+	}
 	for _, f := range files {
 		if !filepath.IsLocal(f.Path) {
 			return "", false, Err
 		}
 		path := filepath.Join(root, f.Path)
 		if os.MkdirAll(filepath.Dir(path), 0700) != nil || os.WriteFile(path, []byte(f.Content), 0600) != nil {
+			return "", false, Err
+		}
+	}
+	if os.Geteuid() == 0 {
+		if filepath.Walk(root, func(path string, _ os.FileInfo, e error) error {
+			if e != nil {
+				return e
+			}
+			return os.Chown(path, int(uid), int(uid))
+		}) != nil {
 			return "", false, Err
 		}
 	}
@@ -232,6 +249,9 @@ func runCheck(ctx context.Context, check Check, files []file) (string, bool, err
 	limits := []string{"--as=268435456:268435456", "--cpu=15:15", "--fsize=16777216:16777216", "--nofile=64:64", "--", "/usr/bin/bwrap"}
 	cmd := exec.CommandContext(ctx, "/usr/bin/prlimit", append(limits, args...)...)
 	cmd.ExtraFiles = []*os.File{filter}
+	if os.Geteuid() == 0 {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}}}
+	}
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 	cmd.WaitDelay = time.Second
 	output := &bounded{}
