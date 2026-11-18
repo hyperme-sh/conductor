@@ -181,6 +181,7 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 }
 
 type Handler struct {
+	ModelCapacity func(string) (string, int)
 	Authenticated func(http.ResponseWriter, *http.Request) bool
 	Client        Client
 	Tenant        string
@@ -214,6 +215,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 512<<10))
 	if e != nil {
 		fail(400)
+		return
+	}
+	if r.URL.Path == "/v1/machine/plan" && !h.Client.Phone {
+		h.plan(w, r, raw)
 		return
 	}
 	var s Submission

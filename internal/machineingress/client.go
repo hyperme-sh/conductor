@@ -16,6 +16,9 @@ import (
 // Submit sends the exact owner-authorized bytes over the verified private socket.
 // It never retries, follows redirects, or substitutes an HTTP network endpoint.
 func Submit(ctx context.Context, socket, credential string, raw []byte) (json.RawMessage, error) {
+	return privateCall(ctx, socket, credential, raw, "/v1/machine/prompt-submit")
+}
+func privateCall(ctx context.Context, socket, credential string, raw []byte, path string) (json.RawMessage, error) {
 	if !strings.HasPrefix(credential, "hm_msi_") || len(credential) > 4096 || strings.ContainsAny(credential, "\r\n") || len(raw) > 512<<10 || !json.Valid(raw) {
 		return nil, refused
 	}
@@ -26,7 +29,7 @@ func Submit(ctx context.Context, socket, credential string, raw []byte) (json.Ra
 	}}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	request, e := http.NewRequestWithContext(ctx, "POST", "http://conductor.local/v1/machine/prompt-submit", bytes.NewReader(raw))
+	request, e := http.NewRequestWithContext(ctx, "POST", "http://conductor.local"+path, bytes.NewReader(raw))
 	if e != nil {
 		return nil, refused
 	}
