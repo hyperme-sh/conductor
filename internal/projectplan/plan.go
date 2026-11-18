@@ -3,6 +3,7 @@ package projectplan
 
 import (
 	"errors"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/agentadvice"
 	"regexp"
 )
 
@@ -22,8 +23,9 @@ type Unit struct {
 	Depends    []string `json:"depends_on"`
 }
 type Request struct {
-	Settings Settings `json:"settings"`
-	Units    []Unit   `json:"units"`
+	Advice   *agentadvice.Request `json:"advice,omitempty"`
+	Settings Settings             `json:"settings"`
+	Units    []Unit               `json:"units"`
 }
 type Budget struct {
 	Capacity int    `json:"capacity"`

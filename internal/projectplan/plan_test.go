@@ -7,7 +7,7 @@ import (
 
 func sample() Request {
 	s, _ := Defaults("vertical-slices")
-	return Request{s, []Unit{{ID: "read", Issue: "https://github.com/a/b/issues/1", Outcome: "Preview", Acceptance: "Preview checked", Scope: "One component", Prompt: "Read the contract"}, {ID: "verify", Issue: "https://github.com/a/b/issues/1", Outcome: "Check", Acceptance: "Check complete", Scope: "One component", Prompt: "Check the contract", Depends: []string{"read"}}}}
+	return Request{Settings: s, Units: []Unit{{ID: "read", Issue: "https://github.com/a/b/issues/1", Outcome: "Preview", Acceptance: "Preview checked", Scope: "One component", Prompt: "Read the contract"}, {ID: "verify", Issue: "https://github.com/a/b/issues/1", Outcome: "Check", Acceptance: "Check complete", Scope: "One component", Prompt: "Check the contract", Depends: []string{"read"}}}}
 }
 func TestBoundariesCapacityAndDuplicateIssue(t *testing.T) {
 	r := sample()
