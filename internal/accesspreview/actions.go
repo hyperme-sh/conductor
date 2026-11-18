@@ -1,6 +1,7 @@
 package accesspreview
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type HTTPSArguments struct {
@@ -106,4 +108,32 @@ func validTyped(p Request) bool {
 		return decode(raw, &args) == nil && args.Verb == "restart" && args.Unit == a.Target && regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@-]{0,120}\.service$`).MatchString(args.Unit) && canonicalFile(args.Executable) && hash(args.ExecutableHash) && hash(args.ControllerHash) && args.UID > 0
 	}
 	return false
+}
+
+// Admit uses the existing durable dispatch journal before any side effect.
+// There is no retry or deletion path for consumed operation IDs.
+func (c Client) Admit(ctx context.Context, raw []byte, journal interface{ Reserve(string, string) error }) (Result, error) {
+	if journal == nil {
+		return Result{}, Refused
+	}
+	result, err := c.ReviewAction(ctx, raw)
+	if err != nil {
+		return Result{}, err
+	}
+	if !result.Permitted {
+		return result, nil
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return Result{}, Refused
+	}
+	digest := sha256.Sum256(encoded)
+	if journal.Reserve(result.RequestID, hex.EncodeToString(digest[:])) != nil {
+		return Result{}, Refused
+	}
+	if ctx.Err() != nil || result.Expires <= float64(time.Now().UnixNano())/1e9 {
+		return Result{}, Refused
+	}
+	result.Reserved = true
+	return result, nil
 }

@@ -61,6 +61,7 @@ type Identity struct {
 	Session      string `json:"session_id"`
 }
 type Result struct {
+	Reserved       bool     `json:"reserved,omitempty"`
 	Version        int      `json:"version"`
 	RequestID      string   `json:"request_id"`
 	PreviewOnly    bool     `json:"preview_only"`
@@ -193,7 +194,7 @@ func (c Client) review(ctx context.Context, raw []byte, mode string) (Result, er
 	}
 	expected := Identity{Tenant: fact.Tenant, Owner: fact.Owner, Principal: fact.Principal, Organization: fact.Organization, Device: fact.Device, Bot: fact.Bot, Assignment: fact.Assignment, Session: fact.Session}
 	now := float64(time.Now().UnixNano()) / 1e9
-	if result.Version != 1 || result.RequestID != p.RequestID || result.PreviewOnly == active || result.Identity != expected || !reflect.DeepEqual(result.Action, p.Action) || result.Project != p.Project || !id(result.PolicyRevision) || result.Expires <= now || result.Expires > fact.Expires || !limit(result.Limits) || result.Limits.Bytes > p.Action.Limits.Bytes || result.Limits.Seconds > p.Action.Limits.Seconds || len(result.Reason) == 0 || len(result.Reason) > 256 {
+	if result.Reserved || result.Version != 1 || result.RequestID != p.RequestID || result.PreviewOnly == active || result.Identity != expected || !reflect.DeepEqual(result.Action, p.Action) || result.Project != p.Project || !id(result.PolicyRevision) || result.Expires <= now || result.Expires > fact.Expires || !limit(result.Limits) || result.Limits.Bytes > p.Action.Limits.Bytes || result.Limits.Seconds > p.Action.Limits.Seconds || len(result.Reason) == 0 || len(result.Reason) > 256 {
 		return Result{}, Refused
 	}
 	if active && result.Permitted && (result.Limits != p.Action.Limits || p.ExpectedPolicy != "" && result.PolicyRevision != p.ExpectedPolicy) {

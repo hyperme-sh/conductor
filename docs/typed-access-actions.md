@@ -19,3 +19,11 @@ Supports #69 and AIuditor #99. Host and Visor must enforce reviewed destinations
 OS identities and durable reservations at execution; this adapter does not grant
 blanket network, write or shell access. Existing read and preview behavior remains
 compatible. No version or publication changes.
+
+`permission-action-admit --config <trusted-dispatch-config>` repeats the current
+owner review and reserves the request ID in the existing durable dispatch
+journal before returning `reserved: true`. A consumed ID is refused after a
+process restart as well. Admission does not execute the action. The private
+Host bridge supplies the trusted configuration; callers cannot choose a new
+journal. A lost response is an unknown outcome and must not be automatically
+retried with a different ID.
