@@ -10,10 +10,10 @@ import (
 )
 
 func accessPreviewCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	return accessReviewCmd(false, args, stdin, stdout, stderr)
+	return accessReviewCmd("preview", args, stdin, stdout, stderr)
 }
 
-func accessReviewCmd(active bool, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func accessReviewCmd(mode string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("permission-review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	plane := fs.String("plane", "", "trusted HTTPS Plane origin")
@@ -28,7 +28,9 @@ func accessReviewCmd(active bool, args []string, stdin io.Reader, stdout, stderr
 	}
 	client := accesspreview.Client{Plane: machineingress.Client{Origin: *plane}, Endpoint: *authority}
 	var result accesspreview.Result
-	if active {
+	if mode == "action" {
+		result, e = client.ReviewAction(context.Background(), raw)
+	} else if mode == "read" {
 		result, e = client.ReviewRead(context.Background(), raw)
 	} else {
 		result, e = client.Preview(context.Background(), raw)
