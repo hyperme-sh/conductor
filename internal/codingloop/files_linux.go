@@ -204,51 +204,42 @@ func runCheck(ctx context.Context, check Check, files []file, uid uint32) (strin
 	if trustedBinary(check.Executable, check.SHA256) != nil || trustedBinary("/usr/bin/bwrap", "") != nil || trustedBinary("/usr/bin/prlimit", "") != nil {
 		return "", false, Err
 	}
-	root, e := os.MkdirTemp("", "conductor-check-")
-	if e != nil {
-		return "", false, e
-	}
-	defer os.RemoveAll(root)
-	if os.Geteuid() == 0 && os.Chown(root, int(uid), int(uid)) != nil {
-		return "", false, Err
-	}
-	for _, f := range files {
-		if !filepath.IsLocal(f.Path) {
-			return "", false, Err
-		}
-		path := filepath.Join(root, f.Path)
-		if os.MkdirAll(filepath.Dir(path), 0700) != nil || os.WriteFile(path, []byte(f.Content), 0600) != nil {
-			return "", false, Err
-		}
-	}
-	if os.Geteuid() == 0 {
-		if filepath.Walk(root, func(path string, _ os.FileInfo, e error) error {
-			if e != nil {
-				return e
-			}
-			return os.Chown(path, int(uid), int(uid))
-		}) != nil {
-			return "", false, Err
-		}
-	}
 	filter, e := processFilter()
 	if e != nil {
 		return "", false, e
 	}
 	defer filter.Close()
+	extraFiles := []*os.File{filter}
 	args := []string{"--seccomp", "3", "--unshare-all", "--die-with-parent", "--new-session", "--cap-drop", "ALL", "--clearenv"}
 	for _, path := range []string{"/usr", "/bin", "/lib", "/lib64"} {
 		if _, e := os.Stat(path); e == nil {
 			args = append(args, "--ro-bind", path, path)
 		}
 	}
-	args = append(args, "--proc", "/proc", "--dev", "/dev", "--size", "16777216", "--tmpfs", "/tmp", "--ro-bind", root, "/workspace", "--chdir", "/workspace", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", "/tmp", "--", check.Executable)
+	args = append(args, "--proc", "/proc", "--dev", "/dev", "--size", "16777216", "--tmpfs", "/tmp", "--size", "1048576", "--tmpfs", "/workspace")
+	for _, f := range files {
+		if !filepath.IsLocal(f.Path) || filepath.Clean(f.Path) != f.Path || f.Path == "." {
+			return "", false, Err
+		}
+		data, e := sealedData("check-input", []byte(f.Content))
+		if e != nil {
+			return "", false, e
+		}
+		defer data.Close()
+		fd := len(extraFiles) + 3
+		extraFiles = append(extraFiles, data)
+		if dir := filepath.Dir(f.Path); dir != "." {
+			args = append(args, "--dir", filepath.Join("/workspace", dir))
+		}
+		args = append(args, "--perms", "0400", "--ro-bind-data", fmt.Sprint(fd), filepath.Join("/workspace", f.Path))
+	}
+	args = append(args, "--remount-ro", "/workspace", "--chdir", "/workspace", "--setenv", "PATH", "/usr/local/bin:/usr/bin:/bin", "--setenv", "HOME", "/tmp", "--", check.Executable)
 	args = append(args, check.Args...)
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	limits := []string{"--as=268435456:268435456", "--cpu=15:15", "--fsize=16777216:16777216", "--nofile=64:64", "--", "/usr/bin/bwrap"}
 	cmd := exec.CommandContext(ctx, "/usr/bin/prlimit", append(limits, args...)...)
-	cmd.ExtraFiles = []*os.File{filter}
+	cmd.ExtraFiles = extraFiles
 	if os.Geteuid() == 0 {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}}}
 	}
@@ -296,16 +287,29 @@ func processFilter() (*os.File, error) {
 		filters = append(filters, unix.SockFilter{Code: 0x15, Jf: 1, K: nr}, unix.SockFilter{Code: 0x06, K: 0x00050001})
 	}
 	filters = append(filters, unix.SockFilter{Code: 0x06, K: 0x7fff0000})
-	fd, e := unix.MemfdCreate("check-filter", unix.MFD_CLOEXEC)
+	var raw bytes.Buffer
+	if binary.Write(&raw, binary.LittleEndian, filters) != nil {
+		return nil, Err
+	}
+	return sealedData("check-filter", raw.Bytes())
+}
+
+// No project-writable host path participates in privileged snapshot setup.
+func sealedData(name string, data []byte) (*os.File, error) {
+	fd, e := unix.MemfdCreate(name, unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING)
 	if e != nil {
 		return nil, Err
 	}
-	f := os.NewFile(uintptr(fd), "check-filter")
-	if binary.Write(f, binary.LittleEndian, filters) != nil {
+	f := os.NewFile(uintptr(fd), name)
+	if _, e = f.Write(data); e != nil {
 		f.Close()
 		return nil, Err
 	}
 	if _, e = f.Seek(0, 0); e != nil {
+		f.Close()
+		return nil, Err
+	}
+	if _, e = unix.FcntlInt(f.Fd(), unix.F_ADD_SEALS, unix.F_SEAL_WRITE|unix.F_SEAL_GROW|unix.F_SEAL_SHRINK|unix.F_SEAL_SEAL); e != nil {
 		f.Close()
 		return nil, Err
 	}

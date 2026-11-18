@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/machineingress"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,5 +239,23 @@ func TestProjectedSerializedWorkspaceRefusesBeforeMutation(t *testing.T) {
 	raw, _ := os.ReadFile(path)
 	if string(raw) != "old" {
 		t.Fatal("unreadable projected context written")
+	}
+}
+
+func TestSnapshotDescriptorsAreImmutable(t *testing.T) {
+	f, err := sealedData("fixture", []byte("reviewed bytes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err = f.WriteAt([]byte("changed"), 0); err == nil {
+		t.Fatal("snapshot writable")
+	}
+	if err = f.Truncate(0); err == nil {
+		t.Fatal("snapshot truncatable")
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil || string(raw) != "reviewed bytes" {
+		t.Fatal("snapshot changed", err)
 	}
 }
