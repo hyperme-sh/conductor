@@ -35,7 +35,7 @@ func TestTypedAdmissionSurvivesJournalRestart(t *testing.T) {
 			json.NewEncoder(w).Encode(machineingress.Fact{Version: 1, Request: input["request_id"].(string), Tenant: p.Tenant, Owner: owner, Principal: "owner", Organization: org, Device: p.Device, Bot: p.Bot, Assignment: p.Assignment, Session: p.Session, Expires: float64(time.Now().UnixNano())/1e9 + 10})
 			return
 		}
-		json.NewEncoder(w).Encode(Result{Version: 1, RequestID: p.RequestID, Identity: Identity{Tenant: p.Tenant, Owner: owner, Principal: "owner", Organization: org, Device: p.Device, Bot: p.Bot, Assignment: p.Assignment, Session: p.Session}, Action: p.Action, Project: p.Project, Decision: "allowed", Permitted: true, Reason: "Exact write", Limits: p.Action.Limits, PolicyRevision: revision, Expires: input["context_expires_at"].(float64)})
+		json.NewEncoder(w).Encode(Result{DispatchAdmitted: strings.HasSuffix(r.URL.Path, "/action-admit"), Version: 1, RequestID: p.RequestID, Identity: Identity{Tenant: p.Tenant, Owner: owner, Principal: "owner", Organization: org, Device: p.Device, Bot: p.Bot, Assignment: p.Assignment, Session: p.Session}, Action: p.Action, Project: p.Project, Decision: "allowed", Permitted: true, Reason: "Exact write", Limits: p.Action.Limits, PolicyRevision: revision, Expires: input["context_expires_at"].(float64)})
 	}))
 	defer server.Close()
 	client := Client{Plane: machineingress.Client{Origin: server.URL, HTTP: server.Client()}, Endpoint: server.URL + "/api/v1/aiuditor/access/action-review", HTTP: server.Client()}
@@ -61,5 +61,48 @@ func TestTypedAdmissionSurvivesJournalRestart(t *testing.T) {
 	defer journal.Close()
 	if _, err = client.Admit(context.Background(), raw, journal); err == nil {
 		t.Fatal("consumed side effect admitted after restart")
+	}
+}
+
+type admissionJournal struct{ calls int }
+
+func (j *admissionJournal) Reserve(id, hash string) error { j.calls++; return nil }
+func TestRevocationBetweenReviewAndAdmissionRefusesDispatch(t *testing.T) {
+	e := sample()
+	e.Preview.Action.Operation = "write"
+	e.Preview.Template[0].Operation = "write"
+	args, _ := json.Marshal(WriteArguments{ContentHash: strings.Repeat("a", 64), ContentBytes: 1, ObjectHash: strings.Repeat("b", 64), ParentHash: strings.Repeat("c", 64)})
+	e.Preview.Action.ArgumentsJSON = string(args)
+	e.Preview.Action.Arguments = fmt.Sprintf("%x", sha256.Sum256(args))
+	p := e.Preview
+	owner, org, revision := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	admissions := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input map[string]any
+		json.NewDecoder(r.Body).Decode(&input)
+		if strings.HasSuffix(r.URL.Path, "/access-context") {
+			json.NewEncoder(w).Encode(machineingress.Fact{Version: 1, Request: input["request_id"].(string), Tenant: p.Tenant, Owner: owner, Principal: "owner", Organization: org, Device: p.Device, Bot: p.Bot, Assignment: p.Assignment, Session: p.Session, Expires: float64(time.Now().UnixNano())/1e9 + 10})
+			return
+		}
+		result := Result{Version: 1, RequestID: p.RequestID, Identity: Identity{Tenant: p.Tenant, Owner: owner, Principal: "owner", Organization: org, Device: p.Device, Bot: p.Bot, Assignment: p.Assignment, Session: p.Session}, Action: p.Action, Project: p.Project, Decision: "allowed", Permitted: true, Reason: "Current write", Limits: p.Action.Limits, PolicyRevision: revision, Expires: input["context_expires_at"].(float64)}
+		if strings.HasSuffix(r.URL.Path, "/action-admit") {
+			admissions++
+			if input["expected_policy_revision"] != revision {
+				t.Error("missing review revision")
+			}
+			result.Permitted = false
+			result.Decision = "prohibited"
+			result.PolicyRevision = uuid.NewString()
+			result.Reason = "Policy changed"
+		}
+		json.NewEncoder(w).Encode(result)
+	}))
+	defer server.Close()
+	client := Client{Plane: machineingress.Client{Origin: server.URL, HTTP: server.Client()}, Endpoint: server.URL + "/api/v1/aiuditor/access/action-review", HTTP: server.Client()}
+	raw, _ := json.Marshal(e)
+	journal := &admissionJournal{}
+	result, err := client.Admit(context.Background(), raw, journal)
+	if err == nil || result.Reserved || journal.calls != 1 || admissions != 1 {
+		t.Fatal(result, err, journal.calls, admissions)
 	}
 }

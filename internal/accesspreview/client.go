@@ -61,20 +61,21 @@ type Identity struct {
 	Session      string `json:"session_id"`
 }
 type Result struct {
-	Reserved       bool     `json:"reserved,omitempty"`
-	Version        int      `json:"version"`
-	RequestID      string   `json:"request_id"`
-	PreviewOnly    bool     `json:"preview_only"`
-	Identity       Identity `json:"identity"`
-	Action         Action   `json:"action"`
-	Project        string   `json:"project"`
-	Decision       string   `json:"decision"`
-	Permitted      bool     `json:"permitted"`
-	Reason         string   `json:"reason"`
-	Limits         Limits   `json:"limits"`
-	PolicyRevision string   `json:"policy_revision"`
-	Learning       bool     `json:"learning_eligible"`
-	Expires        float64  `json:"expires_at"`
+	DispatchAdmitted bool     `json:"dispatch_admitted,omitempty"`
+	Reserved         bool     `json:"reserved,omitempty"`
+	Version          int      `json:"version"`
+	RequestID        string   `json:"request_id"`
+	PreviewOnly      bool     `json:"preview_only"`
+	Identity         Identity `json:"identity"`
+	Action           Action   `json:"action"`
+	Project          string   `json:"project"`
+	Decision         string   `json:"decision"`
+	Permitted        bool     `json:"permitted"`
+	Reason           string   `json:"reason"`
+	Limits           Limits   `json:"limits"`
+	PolicyRevision   string   `json:"policy_revision"`
+	Learning         bool     `json:"learning_eligible"`
+	Expires          float64  `json:"expires_at"`
 }
 type Client struct {
 	Plane    machineingress.Client
@@ -110,6 +111,8 @@ func (c Client) ReviewAction(ctx context.Context, raw []byte) (Result, error) {
 	return c.review(ctx, raw, "action")
 }
 func (c Client) review(ctx context.Context, raw []byte, mode string) (Result, error) {
+	admitting := mode == "action-admit" || mode == "read-admit"
+	mode = strings.TrimSuffix(mode, "-admit")
 	active := mode != "preview"
 	var envelope Envelope
 	if len(raw) > 262144 || decode(raw, &envelope) != nil {
@@ -151,6 +154,12 @@ func (c Client) review(ctx context.Context, raw []byte, mode string) (Result, er
 	if e != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Path != endpointPath {
 		return Result{}, Refused
 	}
+	if admitting {
+		if p.ExpectedPolicy == "" {
+			return Result{}, Refused
+		}
+		endpoint.Path = strings.TrimSuffix(endpoint.Path, "review") + "admit"
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var fact machineingress.Fact
@@ -164,7 +173,7 @@ func (c Client) review(ctx context.Context, raw []byte, mode string) (Result, er
 	}
 	p.ContextExpires = fact.Expires
 	payload, _ := json.Marshal(p)
-	req, e := http.NewRequestWithContext(ctx, "POST", c.Endpoint, bytes.NewReader(payload))
+	req, e := http.NewRequestWithContext(ctx, "POST", endpoint.String(), bytes.NewReader(payload))
 	if e != nil {
 		return Result{}, Refused
 	}
@@ -198,6 +207,9 @@ func (c Client) review(ctx context.Context, raw []byte, mode string) (Result, er
 		return Result{}, Refused
 	}
 	if active && result.Permitted && (result.Limits != p.Action.Limits || p.ExpectedPolicy != "" && result.PolicyRevision != p.ExpectedPolicy) {
+		return Result{}, Refused
+	}
+	if result.DispatchAdmitted != (admitting && result.Permitted) {
 		return Result{}, Refused
 	}
 	switch result.Decision {
