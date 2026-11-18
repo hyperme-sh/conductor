@@ -29,6 +29,14 @@ func accessReviewCmd(mode string, args []string, stdin io.Reader, stdout, stderr
 		return 1
 	}
 	client := accesspreview.Client{Plane: machineingress.Client{Origin: *plane}, Endpoint: *authority}
+	if mode == "dream" {
+		result, err := client.Dream(context.Background(), raw)
+		if err != nil {
+			fmt.Fprintln(stderr, "permission review unavailable")
+			return 1
+		}
+		return writePretty(stdout, result)
+	}
 	var result accesspreview.Result
 	if mode == "admit" {
 		config, err := capabilitydispatch.Load(*configPath)
