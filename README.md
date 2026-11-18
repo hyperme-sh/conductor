@@ -289,7 +289,10 @@ filesystem, 256 MiB address-space and 15-second CPU limits. Child-process and
 thread creation are refused, so choose compatible named checks. Shared-resource
 suites remain CI-owned. AIuditor `check` rules bind the executable
 hash, arguments hash, and workspace snapshot. Missing sandbox tools or authority
-refuse execution rather than falling back to unrestricted processes.
+refuse execution rather than falling back to unrestricted processes. On systems
+restricting unprivileged user namespaces, the administrator must permit Bubblewrap
+through a scoped AppArmor profile. See the disposable CI profile and
+[Ubuntu’s namespace guidance](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions); the worker never changes host security policy.
 
 `spend_price_bounds` is a configuration map keyed by tier name. Each entry has
 `currency` (uppercase ISO code), `model`, exact `endpoint`, `source`, Unix
