@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/machineingress"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func fixture(t *testing.T) (*Loop, *machineingress.ContinueRun, machineingress.CodingTarget, string) {
@@ -156,5 +160,56 @@ print('isolated fixture checked')`
 	output, passed, e := runCheck(context.Background(), Check{Executable: executable, SHA256: digest(binary), Args: []string{"-c", code}}, []file{{Path: "file.py", Content: "fixture"}})
 	if e != nil || !passed {
 		t.Fatalf("sandbox: %s %v", output, e)
+	}
+}
+
+func TestProjectedWorkspaceRefusesBeforeMutation(t *testing.T) {
+	l, run, target, path := fixture(t)
+	other := filepath.Join(target.Workspace, "other.py")
+	os.WriteFile(other, []byte(strings.Repeat("x", 9997)), 0600)
+	if os.Geteuid() == 0 {
+		os.Chown(other, int(l.Options.UID), -1)
+	}
+	run.Execution.Files = append(run.Execution.Files, "other.py")
+	l.checkHook = func(context.Context, Check, []file) (string, bool, error) {
+		t.Fatal("oversized edit checked")
+		return "", false, nil
+	}
+	result, err := l.Finish(t.Context(), run, target, output("longer"))
+	if err != nil || result.CheckOutcome != "needs-input" {
+		t.Fatal(result, err)
+	}
+	raw, _ := os.ReadFile(path)
+	if string(raw) != "old" {
+		t.Fatal("oversized workspace written")
+	}
+}
+func TestWorkExpiryCancelsWhileRenewalStalls(t *testing.T) {
+	l, run, target, _ := fixture(t)
+	l.workHook = nil
+	task := "task"
+	run.Current = &task
+	renewed := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		if b["phase"] == "check" {
+			close(renewed)
+			<-r.Context().Done()
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"admitted": true, "action_id": b["action_id"], "digest": b["digest"], "expires_at": float64(time.Now().Add(1500*time.Millisecond).UnixNano()) / 1e9})
+	}))
+	defer server.Close()
+	l.Client = machineingress.Client{Origin: server.URL, HTTP: server.Client()}
+	started := time.Now()
+	err := l.action(t.Context(), run, target, "bound action", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
+	if err == nil || time.Since(started) > 3*time.Second {
+		t.Fatal("expired action continued", err)
+	}
+	select {
+	case <-renewed:
+	default:
+		t.Fatal("renewal was not pending")
 	}
 }

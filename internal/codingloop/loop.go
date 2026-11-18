@@ -195,10 +195,11 @@ func (l *Loop) action(ctx context.Context, run *machineingress.ContinueRun, t ma
 	raw, _ := json.Marshal(binding)
 	hash := digest(raw)
 	id := uuid.NewString()
-	if l.Client.Work(ctx, l.Token, t, run, id, hash, "begin") != nil {
+	expires, err := l.Client.Work(ctx, l.Token, t, run, id, hash, "begin")
+	if err != nil {
 		return Err
 	}
-	actionCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	actionCtx, cancel := context.WithDeadline(ctx, minDeadline(expires, time.Now().Add(25*time.Second)))
 	defer cancel()
 	actionCtx, stopPolicy := policyContext(actionCtx)
 	defer stopPolicy()
@@ -214,7 +215,8 @@ func (l *Loop) action(ctx context.Context, run *machineingress.ContinueRun, t ma
 			case <-actionCtx.Done():
 				return
 			case <-ticker.C:
-				if l.Client.Work(actionCtx, l.Token, t, run, id, hash, "check") != nil {
+				renewed, err := l.Client.Work(actionCtx, l.Token, t, run, id, hash, "check")
+				if err != nil || !renewed.Equal(expires) {
 					cancel()
 					return
 				}
@@ -227,7 +229,14 @@ func (l *Loop) action(ctx context.Context, run *machineingress.ContinueRun, t ma
 	if actionCtx.Err() != nil {
 		return Err
 	}
-	return l.Client.Work(ctx, l.Token, t, run, id, hash, "complete")
+	_, err = l.Client.Work(actionCtx, l.Token, t, run, id, hash, "complete")
+	return err
+}
+func minDeadline(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
 }
 func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t machineingress.CodingTarget, result machineingress.CodingResult) (machineingress.CodingResult, error) {
 	result.CheckOutcome = "needs-input"
@@ -243,18 +252,22 @@ func (l *Loop) Finish(ctx context.Context, run *machineingress.ContinueRun, t ma
 		return result, e
 	}
 	originals := map[string]file{}
+	total := 0
 	for _, f := range files {
 		originals[f.Path] = f
+		total += len(f.Content)
 	}
 	seen := map[string]bool{}
-	total := 0
 	for _, change := range response.Edits {
 		old, ok := originals[change.Path]
-		total += len(change.Content)
-		if !ok || seen[change.Path] || change.Before != old.Hash || total > 10000 {
+		total += len(change.Content) - len(old.Content)
+		if !ok || seen[change.Path] || change.Before != old.Hash {
 			return result, nil
 		}
 		seen[change.Path] = true
+	}
+	if total > 10000 {
+		return result, nil
 	}
 	for _, change := range response.Edits {
 		if change.Content == originals[change.Path].Content {
