@@ -10,7 +10,11 @@ import (
 )
 
 func accessPreviewCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("permission-preview", flag.ContinueOnError)
+	return accessReviewCmd(false, args, stdin, stdout, stderr)
+}
+
+func accessReviewCmd(active bool, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("permission-review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	plane := fs.String("plane", "", "trusted HTTPS Plane origin")
 	authority := fs.String("authority", "", "trusted HTTPS AIuditor preview endpoint")
@@ -22,7 +26,13 @@ func accessPreviewCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "permission preview unavailable")
 		return 1
 	}
-	result, e := (accesspreview.Client{Plane: machineingress.Client{Origin: *plane}, Endpoint: *authority}).Preview(context.Background(), raw)
+	client := accesspreview.Client{Plane: machineingress.Client{Origin: *plane}, Endpoint: *authority}
+	var result accesspreview.Result
+	if active {
+		result, e = client.ReviewRead(context.Background(), raw)
+	} else {
+		result, e = client.Preview(context.Background(), raw)
+	}
 	if e != nil {
 		fmt.Fprintln(stderr, "permission preview unavailable")
 		return 1
