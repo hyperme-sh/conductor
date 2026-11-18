@@ -43,6 +43,12 @@ func (c Client) runCoding(ctx context.Context, token string, target CodingTarget
 	return c.runSelectedCoding(ctx, token, target, "", submit)
 }
 func (c Client) runSelectedCoding(ctx context.Context, token string, target CodingTarget, expected string, submit func(context.Context, []byte) (json.RawMessage, error)) (CodingResult, error) {
+	return c.runSelectedCodingGeneration(ctx, token, target, expected, 0, submit)
+}
+func (c Client) runSelectedCodingGeneration(ctx context.Context, token string, target CodingTarget, expected string, generation int, submit func(context.Context, []byte) (json.RawMessage, error)) (CodingResult, error) {
+	if generation < 0 || generation > 17 {
+		return CodingResult{}, refused
+	}
 	if len(target.Workspace) < 2 || len(target.Workspace) > 4096 || strings.ContainsAny(target.Workspace, "\x00\r\n") || target.Class == "" || target.Destination == "" || target.MaxOutput < 1 || target.MaxOutput > 32768 {
 		return CodingResult{}, refused
 	}
@@ -57,6 +63,9 @@ func (c Client) runSelectedCoding(ctx context.Context, token string, target Codi
 			return CodingResult{}, refused
 		}
 		claimBody["task_id"] = expected
+	}
+	if generation > 0 {
+		claimBody["worker_generation"] = generation
 	}
 	body, _ := json.Marshal(claimBody)
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -84,6 +93,7 @@ func (c Client) runSelectedCoding(ctx context.Context, token string, target Codi
 		Identity Fact   `json:"identity"`
 		Task     *struct {
 			ID         string `json:"id"`
+			Generation int    `json:"worker_generation"`
 			Assignment string `json:"assignment_id"`
 			Session    string `json:"session_id"`
 			Capability string `json:"capability"`
@@ -106,7 +116,7 @@ func (c Client) runSelectedCoding(ctx context.Context, token string, target Codi
 	}
 	t := claim.Task
 	p := t.Payload
-	if (expected != "" && t.ID != expected) || !canonicalID(t.ID) || t.Assignment != target.Assignment || t.Session != target.Session || t.Capability != "coding" || t.Status != "delivered" || p.Version != 1 || p.Workspace != target.Workspace || p.Device != target.Device {
+	if (generation > 1 && t.Generation != generation) || (expected != "" && t.ID != expected) || !canonicalID(t.ID) || t.Assignment != target.Assignment || t.Session != target.Session || t.Capability != "coding" || t.Status != "delivered" || p.Version != 1 || p.Workspace != target.Workspace || p.Device != target.Device {
 		return CodingResult{}, refused
 	}
 	original, e := base64.StdEncoding.DecodeString(p.Submission)

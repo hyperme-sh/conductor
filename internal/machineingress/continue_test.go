@@ -55,7 +55,7 @@ func TestContinueUsesOwnerStateAcrossTwoChunksAndStops(t *testing.T) {
 	}))
 	defer server.Close()
 	c := Client{Origin: server.URL, HTTP: server.Client()}
-	execute := func(_ context.Context, expected string) (CodingResult, error) {
+	execute := func(_ context.Context, expected string, generation int) (CodingResult, error) {
 		calls++
 		if expected != *run.Current {
 			t.Fatal("selected task not bound before execution")
