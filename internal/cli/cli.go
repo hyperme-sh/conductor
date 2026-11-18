@@ -42,6 +42,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "machine-context", "machine-prompt":
 		return machinePromptCmd(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "continue-plan":
+		return continuePlanCmd(args[1:], os.Stdin, stdout, stderr)
 	case "coding-run":
 		return codingRunCmd(args[1:], os.Stdin, stdout, stderr)
 	case "permission-dream":
@@ -290,7 +292,18 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		}
 		server.MachineFactory = func(next config.Config) (http.Handler, error) {
 			receiver := proxy.New(next, hop, journal)
-			return machineingress.New(machineingress.Client{Origin: *machinePlane}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			handler, err := machineingress.New(machineingress.Client{Origin: *machinePlane}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			if err == nil {
+				handler.ModelCapacity = func(destination string) (string, int, int) {
+					for _, tier := range []config.Tier{next.Cheap, next.Frontier} {
+						if tier.Configured() && (destination == tier.Model || destination == tier.Name) {
+							return tier.Model, tier.ContextWindow, tier.OutputLimit
+						}
+					}
+					return "unknown", 0, 0
+				}
+			}
+			return handler, err
 		}
 		server.MachineIngress, err = server.MachineFactory(cfg)
 		if err != nil {

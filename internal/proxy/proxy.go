@@ -392,7 +392,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.PhoneIngress.ServeHTTP(w, r)
 		return
 	}
-	if p.MachineIngress != nil && r.URL.Path == "/v1/machine/prompt-submit" {
+	if p.MachineIngress != nil && (r.URL.Path == "/v1/machine/prompt-submit" || r.URL.Path == "/v1/machine/plan") {
 		p.MachineIngress.ServeHTTP(w, r)
 		return
 	}
