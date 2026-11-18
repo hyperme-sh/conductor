@@ -122,7 +122,7 @@ func (c Client) runCoding(ctx context.Context, token string, target CodingTarget
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	if json.Unmarshal(output, &completion) != nil || len(completion.Choices) != 1 || len(completion.Choices[0].Message.Content) > 65536 {
+	if json.Unmarshal(output, &completion) != nil || len(completion.Choices) != 1 || len(completion.Choices[0].Message.Content) == 0 || len(completion.Choices[0].Message.Content) > 65536 {
 		return result, nil
 	}
 	digest := sha256.Sum256(output)

@@ -31,7 +31,7 @@ func codingRunCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	if d.Decode(&input) != nil || d.Decode(new(any)) != io.EOF {
 		return 1
 	}
-	result, e := (machineingress.Client{Origin: *plane}).RunCoding(context.Background(), input.Credential, *socket, input.Target)
+	result, e := (machineingress.Client{Origin: *plane}).ContinueCoding(context.Background(), input.Credential, *socket, input.Target)
 	if e != nil {
 		fmt.Fprintln(stderr, "Assigned coding task unavailable; no retry")
 		return 1
