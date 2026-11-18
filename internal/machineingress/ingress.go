@@ -181,7 +181,7 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 }
 
 type Handler struct {
-	ModelCapacity func(string) (string, int)
+	ModelCapacity func(string) (string, int, int)
 	Authenticated func(http.ResponseWriter, *http.Request) bool
 	Client        Client
 	Tenant        string

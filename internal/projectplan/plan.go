@@ -94,7 +94,7 @@ func Build(r Request, assignment, model string, capacity, output int) (Preview, 
 	issues := map[string]bool{}
 	ready := 0
 	for _, u := range r.Units {
-		if !identifier.MatchString(u.ID) || seen[u.ID] || !issue.MatchString(u.Issue) || !text(u.Outcome, 256) || !text(u.Acceptance, 512) || !text(u.Scope, 512) || !text(u.Prompt, 32000) || len(u.Depends) > 16 {
+		if !identifier.MatchString(u.ID) || seen[u.ID] || (!issue.MatchString(u.Issue) || len(u.Issue) > 512) || !text(u.Outcome, 256) || !text(u.Acceptance, 512) || !text(u.Scope, 512) || !text(u.Prompt, 32000) || len(u.Depends) > 16 {
 			return p, invalid
 		}
 		deps := map[string]bool{}
@@ -117,7 +117,7 @@ func Build(r Request, assignment, model string, capacity, output int) (Preview, 
 		if len(prompt) > input || len(prompt) > 32000 {
 			p.NeedsInput = append(p.NeedsInput, u.ID+": split into smaller acceptance units before dispatch")
 		}
-		runnable := len(u.Depends) == 0 && ready < r.Settings.WIP && len(prompt) <= input
+		runnable := len(u.Depends) == 0 && ready < r.Settings.WIP && len(prompt) <= input && len(prompt) <= 32000
 		if runnable {
 			ready++
 		}

@@ -32,14 +32,20 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request, raw []byte) {
 		http.Error(w, "Plan scope unavailable", 403)
 		return
 	}
-	model, capacity := "unknown", 0
+	model, capacity, outputLimit := "unknown", 0, 0
 	if h.ModelCapacity != nil {
-		model, capacity = h.ModelCapacity(in.Destination)
+		model, capacity, outputLimit = h.ModelCapacity(in.Destination)
 	}
 	p, e := projectplan.Build(in.Plan, in.Binding.Assignment, model, capacity, in.MaxOutput)
 	if e != nil {
 		http.Error(w, "Invalid bounded plan", 400)
 		return
+	}
+	if outputLimit > 0 && in.MaxOutput > outputLimit {
+		p.NeedsInput = append(p.NeedsInput, "configured output allowance exceeded")
+		for i := range p.Chunks {
+			p.Chunks[i].Ready = false
+		}
 	}
 	json.NewEncoder(w).Encode(p)
 }

@@ -54,3 +54,13 @@ func TestPresetsAndSpikeStops(t *testing.T) {
 		}
 	}
 }
+
+func TestExpandedPromptDoesNotConsumeWIP(t *testing.T) {
+	r := sample()
+	r.Units[0].Prompt = strings.Repeat("x", 32000)
+	r.Units[1].Depends = nil
+	p, e := Build(r, "assignment", "model", 131072, 512)
+	if e != nil || len(p.NeedsInput) != 1 || p.Chunks[0].Ready || !p.Chunks[1].Ready {
+		t.Fatal(p, e)
+	}
+}

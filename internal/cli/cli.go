@@ -294,13 +294,13 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 			receiver := proxy.New(next, hop, journal)
 			handler, err := machineingress.New(machineingress.Client{Origin: *machinePlane}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
 			if err == nil {
-				handler.ModelCapacity = func(destination string) (string, int) {
+				handler.ModelCapacity = func(destination string) (string, int, int) {
 					for _, tier := range []config.Tier{next.Cheap, next.Frontier} {
 						if tier.Configured() && (destination == tier.Model || destination == tier.Name) {
-							return tier.Model, tier.ContextWindow
+							return tier.Model, tier.ContextWindow, tier.OutputLimit
 						}
 					}
-					return "unknown", 0
+					return "unknown", 0, 0
 				}
 			}
 			return handler, err

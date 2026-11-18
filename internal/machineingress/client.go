@@ -43,8 +43,12 @@ func privateCall(ctx context.Context, socket, credential string, raw []byte, pat
 	if response.StatusCode != 200 {
 		return nil, refused
 	}
-	body, e := io.ReadAll(io.LimitReader(response.Body, 524289))
-	if e != nil || len(body) > 524288 || !json.Valid(body) {
+	responseLimit := 524288
+	if path == "/v1/machine/plan" {
+		responseLimit = 1048576
+	}
+	body, e := io.ReadAll(io.LimitReader(response.Body, int64(responseLimit+1)))
+	if e != nil || len(body) > responseLimit || !json.Valid(body) {
 		return nil, refused
 	}
 	return body, nil
