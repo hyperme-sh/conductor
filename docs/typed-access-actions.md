@@ -27,3 +27,12 @@ process restart as well. Admission does not execute the action. The private
 Host bridge supplies the trusted configuration; callers cannot choose a new
 journal. A lost response is an unknown outcome and must not be automatically
 retried with a different ID.
+
+For AIuditor #92, local durable reservation is followed by owner admission.
+Conductor repeats the active context and exact review bindings against the
+reviewed policy revision at `/action-admit`; only the owner's committed
+`dispatch_admitted` response can produce `reserved: true`. A concurrent
+revocation therefore refuses dispatch after local reservation, without reusing
+that request ID. `permission-read-admit` similarly consumes read admission at
+the policy owner. Reviews alone cannot claim admission. This commit is the
+ordering point: a later revocation cannot undo an already admitted operation.

@@ -44,6 +44,8 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		return accessReviewCmd("admit", args[1:], os.Stdin, stdout, stderr)
 	case "permission-action-review":
 		return accessReviewCmd("action", args[1:], os.Stdin, stdout, stderr)
+	case "permission-read-admit":
+		return accessReviewCmd("read-admit", args[1:], os.Stdin, stdout, stderr)
 	case "permission-read-review":
 		return accessReviewCmd("read", args[1:], os.Stdin, stdout, stderr)
 	case "permission-preview":

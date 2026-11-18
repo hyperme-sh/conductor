@@ -134,6 +134,31 @@ func (c Client) Admit(ctx context.Context, raw []byte, journal interface{ Reserv
 	if ctx.Err() != nil || result.Expires <= float64(time.Now().UnixNano())/1e9 {
 		return Result{}, Refused
 	}
-	result.Reserved = true
-	return result, nil
+	admitted, err := c.consume(ctx, raw, result.PolicyRevision, "action-admit")
+	if err != nil || !admitted.Permitted || !admitted.DispatchAdmitted {
+		return Result{}, Refused
+	}
+	admitted.Reserved = true
+	return admitted, nil
+}
+
+func (c Client) consume(ctx context.Context, raw []byte, revision, mode string) (Result, error) {
+	var envelope Envelope
+	if decode(raw, &envelope) != nil {
+		return Result{}, Refused
+	}
+	envelope.Preview.ExpectedPolicy = revision
+	updated, err := json.Marshal(envelope)
+	if err != nil {
+		return Result{}, Refused
+	}
+	return c.review(ctx, updated, mode)
+}
+
+func (c Client) AdmitRead(ctx context.Context, raw []byte) (Result, error) {
+	result, err := c.ReviewRead(ctx, raw)
+	if err != nil || !result.Permitted {
+		return result, err
+	}
+	return c.consume(ctx, raw, result.PolicyRevision, "read-admit")
 }

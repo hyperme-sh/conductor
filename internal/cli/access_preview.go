@@ -41,6 +41,8 @@ func accessReviewCmd(mode string, args []string, stdin io.Reader, stdout, stderr
 		}
 		defer journal.Close()
 		result, e = client.Admit(context.Background(), raw, journal)
+	} else if mode == "read-admit" {
+		result, e = client.AdmitRead(context.Background(), raw)
 	} else if mode == "action" {
 		result, e = client.ReviewAction(context.Background(), raw)
 	} else if mode == "read" {
