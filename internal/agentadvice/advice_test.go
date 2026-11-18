@@ -62,3 +62,23 @@ func TestTunableThresholdsAndOwnership(t *testing.T) {
 		t.Fatal(a, e)
 	}
 }
+
+func TestStopStatesCannotBeOverriddenAndCompletionKeepsHandoff(t *testing.T) {
+	r := fixture()
+	r.Observations.Failed = []string{"same", "same", "same"}
+	r.Observations.Files = []string{"changed.go"}
+	r.Observations.Blockers = []string{"follow-up"}
+	for _, state := range []string{"paused", "needs-input", "external-blocker", "limit"} {
+		r.State = state
+		a, e := Recommend(r, time.Unix(101, 0))
+		if e != nil || a.Action != "checkpoint-compact" || a.Reasons[0] != "declared-stop-state" {
+			t.Fatal(a, e)
+		}
+	}
+	r.State = "completed"
+	r.Completed = r.Total
+	a, e := Recommend(r, time.Unix(101, 0))
+	if e != nil || a.Action != "retire" || len(a.Handoff.Files) != 1 || len(a.Handoff.Failed) != 3 || len(a.Handoff.Blockers) != 1 {
+		t.Fatal(a, e)
+	}
+}

@@ -92,13 +92,18 @@ func Recommend(r Request, now time.Time) (Advice, error) {
 		return a, bad
 	}
 	set := func(action, reason, next string) { a.Action = action; a.Reasons = []string{reason}; a.Next = next }
-	if r.State == "paused" || r.State == "needs-input" || r.State == "external-blocker" || r.State == "limit" {
-		a.Next = "Keep the current stop state until its declared reason is resolved"
-	}
-	if r.State == "completed" && r.Completed == r.Total {
-		set("retire", "task-complete", "Confirm completion and release this worker while preserving task history")
-		a.Confidence = "high"
-		a.Handoff.Next = a.Next
+	finish := func() (Advice, error) {
+		if r.State == "completed" && r.Completed == r.Total {
+			set("retire", "task-complete", "Confirm completion and release this worker while preserving task history")
+			a.Confidence = "high"
+			if a.Handoff.Next == "" || a.Handoff.Next == "Refresh current owner status before acting" {
+				a.Handoff.Next = a.Next
+			}
+		}
+		if r.State == "paused" || r.State == "needs-input" || r.State == "external-blocker" || r.State == "limit" {
+			set("checkpoint-compact", "declared-stop-state", "Keep the current stop state until its declared reason is resolved; checkpoint observations without replacing the worker")
+			a.Handoff.Next = "Preserve the declared stop state. " + a.Handoff.Next
+		}
 		return a, nil
 	}
 	o := r.Observations
@@ -106,7 +111,7 @@ func Recommend(r Request, now time.Time) (Advice, error) {
 		a.Unknown = append(a.Unknown, "fresh-work-quality", "context", "cost", "ownership")
 		a.Reasons = []string{"observations-missing-or-stale"}
 		a.Next = "Refresh observations and owner status; do not replace a worker based on stale metrics"
-		return a, nil
+		return finish()
 	}
 	if !stringsBound(o.Failed, 32, 128) || !stringsBound(o.Files, 16, 512) || !stringsBound(o.Blockers, 16, 512) || len(o.Next) > 1024 {
 		return a, bad
@@ -159,5 +164,5 @@ func Recommend(r Request, now time.Time) (Advice, error) {
 	if o.CostMicros != nil {
 		a.Contributing = append(a.Contributing, "cost-reported")
 	}
-	return a, nil
+	return finish()
 }
