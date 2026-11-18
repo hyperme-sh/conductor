@@ -91,8 +91,8 @@ func (c Client) continueCall(ctx context.Context, token string, target CodingTar
 	if response.StatusCode != 200 {
 		return nil, refused
 	}
-	raw, e = io.ReadAll(io.LimitReader(response.Body, 65537))
-	if e != nil || len(raw) > 65536 {
+	raw, e = io.ReadAll(io.LimitReader(response.Body, 131073))
+	if e != nil || len(raw) > 131072 {
 		return nil, refused
 	}
 	var result struct {

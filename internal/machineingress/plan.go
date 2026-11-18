@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/agentadvice"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/projectplan"
 	"io"
 	"net/http"
@@ -30,6 +31,15 @@ func (h *Handler) plan(w http.ResponseWriter, r *http.Request, raw []byte) {
 	defer cancel()
 	if _, e := h.Client.Check(ctx, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), in.Binding, "", "", "", ""); e != nil {
 		http.Error(w, "Plan scope unavailable", 403)
+		return
+	}
+	if in.Plan.Advice != nil {
+		a, e := agentadvice.Recommend(*in.Plan.Advice, time.Now())
+		if e != nil {
+			http.Error(w, "Invalid observations", 400)
+			return
+		}
+		json.NewEncoder(w).Encode(a)
 		return
 	}
 	model, capacity, outputLimit := "unknown", 0, 0
