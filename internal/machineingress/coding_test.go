@@ -16,7 +16,7 @@ import (
 )
 
 func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
-	for _, scenario := range []string{"success", "truncated", "wrong-selected", "wrong-workspace", "wrong-owner", "wrong-route", "lost-output", "cancelled", "idle"} {
+	for _, scenario := range []string{"success", "truncated", "wrong-selected", "wrong-generation", "wrong-workspace", "wrong-owner", "wrong-route", "lost-output", "cancelled", "idle"} {
 		t.Run(scenario, func(t *testing.T) {
 			s := submission()
 			target := CodingTarget{Binding: s.Binding, Workspace: "/project", Class: s.Class, Destination: s.Destination, MaxOutput: s.MaxOutput}
@@ -38,6 +38,9 @@ func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
 				claims++
 				if claims > 1 {
 					t.Error("claim repeated")
+				}
+				if scenario == "wrong-generation" && body["worker_generation"] != float64(2) {
+					t.Error("generation missing")
 				}
 				if body["workspace"] != "/project" {
 					t.Error("workspace not bound")
@@ -67,7 +70,11 @@ func TestCodingClaimBindsConfiguredTargetAndNeverRetries(t *testing.T) {
 			if scenario == "wrong-selected" {
 				expected = uuid.NewString()
 			}
-			result, e := c.runSelectedCoding(t.Context(), "hm_msi_test", target, expected, func(ctx context.Context, raw []byte) (json.RawMessage, error) {
+			generation := 0
+			if scenario == "wrong-generation" {
+				generation = 2
+			}
+			result, e := c.runSelectedCodingGeneration(t.Context(), "hm_msi_test", target, expected, generation, func(ctx context.Context, raw []byte) (json.RawMessage, error) {
 				dispatches++
 				if string(raw) != string(original) {
 					t.Error("original changed")

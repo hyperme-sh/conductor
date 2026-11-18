@@ -102,7 +102,7 @@ func (c Client) continueCall(ctx context.Context, token string, target CodingTar
 	if json.Unmarshal(raw, &result) != nil {
 		return nil, refused
 	}
-	if result.Run != nil && (!canonicalID(result.Run.ID) || result.Run.Revision < 1 || result.Run.Workspace != target.Workspace || result.Run.Assignment != target.Assignment || len(result.Run.Chunks) > 16) {
+	if result.Run != nil && (!canonicalID(result.Run.ID) || result.Run.Revision < 1 || result.Run.Generation < 0 || result.Run.Generation > 17 || result.Run.Workspace != target.Workspace || result.Run.Assignment != target.Assignment || len(result.Run.Chunks) > 16) {
 		return nil, refused
 	}
 	return result.Run, nil
