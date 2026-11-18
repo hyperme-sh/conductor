@@ -139,6 +139,9 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Tenant-ID", b.Tenant)
+	if task != "" && !c.Phone {
+		req.Header.Set("X-Conductor-Spend-Admission", "1")
+	}
 	client := http.Client{Timeout: 5 * time.Second}
 	if c.HTTP != nil {
 		client = *c.HTTP

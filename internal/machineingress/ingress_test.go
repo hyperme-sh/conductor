@@ -50,6 +50,9 @@ func authority(t *testing.T, s Submission, mutate func(*Fact)) (*httptest.Server
 			mu.Lock()
 			defer mu.Unlock()
 			if command == "begin" {
+				if kind == "machine" && r.Header.Get("X-Conductor-Spend-Admission") != "1" {
+					t.Error("missing spending capability")
+				}
 				if begun {
 					w.WriteHeader(409)
 					return
