@@ -33,7 +33,8 @@ type Rule struct {
 }
 type Action struct {
 	Rule
-	Arguments string `json:"arguments_sha256"`
+	Arguments     string `json:"arguments_sha256"`
+	ArgumentsJSON string `json:"arguments_json,omitempty"`
 }
 type Request struct {
 	ExpectedPolicy string  `json:"expected_policy_revision,omitempty"`
@@ -60,6 +61,7 @@ type Identity struct {
 	Session      string `json:"session_id"`
 }
 type Result struct {
+	Reserved       bool     `json:"reserved,omitempty"`
 	Version        int      `json:"version"`
 	RequestID      string   `json:"request_id"`
 	PreviewOnly    bool     `json:"preview_only"`
@@ -96,20 +98,27 @@ func limit(l Limits) bool {
 	return l.Bytes > 0 && l.Bytes <= 67108864 && l.Seconds > 0 && l.Seconds <= 300
 }
 func (c Client) Preview(ctx context.Context, raw []byte) (Result, error) {
-	return c.review(ctx, raw, false)
+	return c.review(ctx, raw, "preview")
 }
 
 // ReviewRead binds a current active Plane identity to AIuditor's exact read.
 func (c Client) ReviewRead(ctx context.Context, raw []byte) (Result, error) {
-	return c.review(ctx, raw, true)
+	return c.review(ctx, raw, "read")
 }
 
-func (c Client) review(ctx context.Context, raw []byte, active bool) (Result, error) {
+func (c Client) ReviewAction(ctx context.Context, raw []byte) (Result, error) {
+	return c.review(ctx, raw, "action")
+}
+func (c Client) review(ctx context.Context, raw []byte, mode string) (Result, error) {
+	active := mode != "preview"
 	var envelope Envelope
 	if len(raw) > 262144 || decode(raw, &envelope) != nil {
 		return Result{}, Refused
 	}
 	p := envelope.Preview
+	if mode != "action" && p.Action.ArgumentsJSON != "" {
+		return Result{}, Refused
+	}
 	if !p.Binding.Valid() || !id(p.RequestID) || p.TemplateVersion != 1 || len(p.Template) < 1 || len(p.Template) > 32 || len(p.Project) == 0 || len(p.Project) > 4096 || !limit(p.Action.Limits) || len(p.Action.Arguments) != 64 {
 		return Result{}, Refused
 	}
@@ -119,7 +128,12 @@ func (c Client) review(ctx context.Context, raw []byte, active bool) (Result, er
 		}
 	}
 	endpointPath := "/api/v1/aiuditor/access/preview"
-	if active {
+	if mode == "action" {
+		endpointPath = "/api/v1/aiuditor/access/action-review"
+		if !validTyped(p) {
+			return Result{}, Refused
+		}
+	} else if active {
 		endpointPath = "/api/v1/aiuditor/access/read-review"
 		digest, err := hex.DecodeString(p.Action.Arguments)
 		if err != nil || len(digest) != 32 || strings.ToLower(p.Action.Arguments) != p.Action.Arguments || p.Action.Operation != "read" || !path.IsAbs(p.Project) || path.Clean(p.Project) != p.Project || p.Project == "/" || path.Clean(p.Action.Target) != p.Action.Target || !strings.HasPrefix(p.Action.Target, p.Project+"/") || strings.ContainsAny(p.Action.Target, "*?\\") || p.ExpectedPolicy != "" && !id(p.ExpectedPolicy) {
@@ -180,7 +194,7 @@ func (c Client) review(ctx context.Context, raw []byte, active bool) (Result, er
 	}
 	expected := Identity{Tenant: fact.Tenant, Owner: fact.Owner, Principal: fact.Principal, Organization: fact.Organization, Device: fact.Device, Bot: fact.Bot, Assignment: fact.Assignment, Session: fact.Session}
 	now := float64(time.Now().UnixNano()) / 1e9
-	if result.Version != 1 || result.RequestID != p.RequestID || result.PreviewOnly == active || result.Identity != expected || !reflect.DeepEqual(result.Action, p.Action) || result.Project != p.Project || !id(result.PolicyRevision) || result.Expires <= now || result.Expires > fact.Expires || !limit(result.Limits) || result.Limits.Bytes > p.Action.Limits.Bytes || result.Limits.Seconds > p.Action.Limits.Seconds || len(result.Reason) == 0 || len(result.Reason) > 256 {
+	if result.Reserved || result.Version != 1 || result.RequestID != p.RequestID || result.PreviewOnly == active || result.Identity != expected || !reflect.DeepEqual(result.Action, p.Action) || result.Project != p.Project || !id(result.PolicyRevision) || result.Expires <= now || result.Expires > fact.Expires || !limit(result.Limits) || result.Limits.Bytes > p.Action.Limits.Bytes || result.Limits.Seconds > p.Action.Limits.Seconds || len(result.Reason) == 0 || len(result.Reason) > 256 {
 		return Result{}, Refused
 	}
 	if active && result.Permitted && (result.Limits != p.Action.Limits || p.ExpectedPolicy != "" && result.PolicyRevision != p.ExpectedPolicy) {
