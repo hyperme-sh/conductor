@@ -497,6 +497,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reserve before review, token counting, or generation can spend anything.
+	moneyBound, moneyLimited, moneyErr := p.reserveMoney(r, proto, prepared, tier)
+	if moneyErr != nil {
+		writeJSON(w, moneyErr.status, map[string]any{"error": moneyErr.message})
+		return
+	}
+
 	previousTier := tier.Name
 	tier, err = p.reviewChoice(r, proto, prepared, boolField(obj, "stream"), decision, tier)
 	if err != nil {
@@ -584,12 +591,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if hash, err := hashBody(proto, prepared); err == nil {
 		prelimHash = hash
 	}
-	useNotes := p.Notes != nil && acceptsNotes(proto) && authorizeProxy(r) == nil
+	useNotes := !moneyLimited && p.Notes != nil && acceptsNotes(proto) && authorizeProxy(r) == nil
 	var query string
 	if useNotes {
 		query = userQuery(prepared)
 	}
-	next, didCompact, memLookups, memHits, compactErr := p.maybeCompact(r.Context(), r, proto, prepared, taskID, stepID, prelimHash, tier, originalLease)
+	var next []byte
+	var didCompact bool
+	var memLookups, memHits int
+	var compactErr error
+	if !moneyLimited {
+		next, didCompact, memLookups, memHits, compactErr = p.maybeCompact(r.Context(), r, proto, prepared, taskID, stepID, prelimHash, tier, originalLease)
+	}
 	if compactErr != nil {
 		var denied proxyAuthError
 		if errors.As(compactErr, &denied) {
@@ -744,6 +757,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r = r.WithContext(context.WithValue(r.Context(), budgetContextKey{}, ledger))
 	}
+	if moneyLimited && (count == nil || !moneyBound.accepts(tier, *count, allowance)) {
+		writeJSON(w, 409, map[string]any{"error": "final request exceeds reserved monetary bound"})
+		return
+	}
+
 	p.forward(w, r, authReq, tier, wire, stream, secrets, base)
 }
 

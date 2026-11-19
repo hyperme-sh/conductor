@@ -101,3 +101,83 @@ func TestNextChunkRefusesDependenciesAndRepeatedWork(t *testing.T) {
 		t.Fatal("active work duplicated")
 	}
 }
+
+type fixtureHooks struct {
+	prepare func(context.Context, *ContinueRun, CodingTarget) (string, error)
+	finish  func(context.Context, *ContinueRun, CodingTarget, CodingResult) (CodingResult, error)
+}
+
+func (h fixtureHooks) Prepare(c context.Context, r *ContinueRun, t CodingTarget) (string, error) {
+	return h.prepare(c, r, t)
+}
+func (h fixtureHooks) Finish(c context.Context, r *ContinueRun, t CodingTarget, v CodingResult) (CodingResult, error) {
+	return h.finish(c, r, t, v)
+}
+func TestEditHooksBindContextAndActualCheckResult(t *testing.T) {
+	s := submission()
+	target := CodingTarget{Binding: s.Binding, Workspace: "/project"}
+	chunk, task := uuid.NewString(), uuid.NewString()
+	for _, failure := range []string{"", "prepare", "finish"} {
+		t.Run(failure, func(t *testing.T) {
+			run := ContinueRun{ID: uuid.NewString(), Revision: 1, Generation: 1, Continue: true, State: "running", Workspace: target.Workspace, Assignment: target.Assignment, Execution: &Execution{Files: []string{"file.py"}, Checks: []string{"unit"}, MaxRepairs: 1}}
+			json.Unmarshal([]byte(`[{"id":"`+chunk+`","depends_on":[],"state":"pending"}]`), &run.Chunks)
+			advances, executions, records := 0, 0, 0
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				json.NewDecoder(r.Body).Decode(&body)
+				switch {
+				case strings.HasSuffix(r.URL.Path, "continue-state"):
+				case strings.HasSuffix(r.URL.Path, "continue-advance"):
+					advances++
+					if body["context"] != "reviewed files" || body["chunk_id"] != chunk {
+						t.Error("missing reviewed context")
+					}
+					run.Current = &task
+				case strings.HasSuffix(r.URL.Path, "continue-record"):
+					records++
+					if body["chunk_id"] != task || body["outcome"] != "check-failed" || body["feedback"] != "actual check failure" || body["workspace_sha256"] != strings.Repeat("b", 64) {
+						t.Error("check result not bound", body)
+					}
+				default:
+					t.Error("unexpected endpoint")
+				}
+				json.NewEncoder(w).Encode(map[string]any{"run": run})
+			}))
+			defer server.Close()
+			hooks := fixtureHooks{prepare: func(context.Context, *ContinueRun, CodingTarget) (string, error) {
+				if failure == "prepare" {
+					return "", refused
+				}
+				return "reviewed files", nil
+			}, finish: func(_ context.Context, r *ContinueRun, _ CodingTarget, v CodingResult) (CodingResult, error) {
+				if failure == "finish" {
+					return v, refused
+				}
+				if v.Content != "model edits" || *r.Current != task {
+					t.Error("lost model output binding")
+				}
+				v.CheckOutcome = "check-failed"
+				v.Feedback = "actual check failure"
+				v.WorkspaceSHA = strings.Repeat("b", 64)
+				return v, nil
+			}}
+			client := Client{Origin: server.URL, HTTP: server.Client()}
+			_, err := client.continueCodingHooks(t.Context(), "hm_msi_fixture", target, func(_ context.Context, expected string, generation int) (CodingResult, error) {
+				executions++
+				if expected != task || generation != 1 {
+					t.Error("wrong worker")
+				}
+				return CodingResult{State: "output-observed", Task: task, OutputSHA: strings.Repeat("a", 64), Content: "model edits", CheckOutcome: "passed"}, nil
+			}, hooks)
+			if (err != nil) != (failure != "") {
+				t.Fatal(err)
+			}
+			if failure == "prepare" && (advances != 0 || executions != 0) {
+				t.Fatal("dispatched without reviewed context")
+			}
+			if records != map[bool]int{true: 1, false: 0}[failure == ""] {
+				t.Fatal("recorded an unconfirmed check")
+			}
+		})
+	}
+}

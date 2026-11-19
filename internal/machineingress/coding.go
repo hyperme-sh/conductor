@@ -15,7 +15,19 @@ import (
 )
 
 // CodingTarget is supplied by the trusted host configuration, never prompt text.
+type CodingCheck struct {
+	Name       string   `json:"name"`
+	Executable string   `json:"executable"`
+	SHA256     string   `json:"sha256"`
+	Args       []string `json:"args"`
+}
+type ExecutionOptions struct {
+	UID    uint32        `json:"uid"`
+	Checks []CodingCheck `json:"checks"`
+}
 type CodingTarget struct {
+	Options *ExecutionOptions `json:"execution_options,omitempty"`
+
 	Binding
 	Workspace   string `json:"workspace"`
 	Class       string `json:"class"`
@@ -23,6 +35,9 @@ type CodingTarget struct {
 	MaxOutput   int    `json:"max_output_tokens"`
 }
 type CodingResult struct {
+	WorkspaceSHA string `json:"-"`
+	Content      string `json:"-"`
+	Feedback     string `json:"-"`
 	CheckOutcome string `json:"-"`
 	Version      int    `json:"version"`
 	Task         string `json:"task_id,omitempty"`
@@ -149,6 +164,7 @@ func (c Client) runSelectedCodingGeneration(ctx context.Context, token string, t
 	}
 	digest := sha256.Sum256(output)
 	result.OutputSHA = hex.EncodeToString(digest[:])
+	result.Content = completion.Choices[0].Message.Content
 	result.CheckOutcome = "needs-input"
 	if completion.Choices[0].Finish == "stop" {
 		result.State = "output-observed"

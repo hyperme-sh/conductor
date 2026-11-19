@@ -11,7 +11,20 @@ import (
 	"time"
 )
 
+type Execution struct {
+	Files      []string `json:"files"`
+	Checks     []string `json:"checks"`
+	MaxRepairs int      `json:"max_repairs"`
+}
+type CodingHooks interface {
+	Prepare(context.Context, *ContinueRun, CodingTarget) (string, error)
+	Finish(context.Context, *ContinueRun, CodingTarget, CodingResult) (CodingResult, error)
+}
 type ContinueRun struct {
+	CheckedOutcome   string     `json:"checked_outcome"`
+	CheckedWorkspace string     `json:"checked_workspace_sha256"`
+	Execution        *Execution `json:"execution"`
+
 	Generation int     `json:"worker_generation"`
 	ID         string  `json:"id"`
 	Revision   int     `json:"revision"`
@@ -113,11 +126,17 @@ func (c Client) continueCall(ctx context.Context, token string, target CodingTar
 // All state and selected-task ownership remain in Plane; process restart cannot
 // reset pause, budgets or a consumed operation. There are no execution retries.
 func (c Client) ContinueCoding(ctx context.Context, token, socket string, target CodingTarget) (CodingResult, error) {
-	return c.continueCoding(ctx, token, target, func(ctx context.Context, expected string, generation int) (CodingResult, error) {
+	return c.ContinueWithHooks(ctx, token, socket, target, nil)
+}
+func (c Client) ContinueWithHooks(ctx context.Context, token, socket string, target CodingTarget, hooks CodingHooks) (CodingResult, error) {
+	return c.continueCodingHooks(ctx, token, target, func(ctx context.Context, expected string, generation int) (CodingResult, error) {
 		return c.runSelectedCodingGeneration(ctx, token, target, expected, generation, func(ctx context.Context, raw []byte) (json.RawMessage, error) { return Submit(ctx, socket, token, raw) })
-	})
+	}, hooks)
 }
 func (c Client) continueCoding(ctx context.Context, token string, target CodingTarget, execute func(context.Context, string, int) (CodingResult, error)) (CodingResult, error) {
+	return c.continueCodingHooks(ctx, token, target, execute, nil)
+}
+func (c Client) continueCodingHooks(ctx context.Context, token string, target CodingTarget, execute func(context.Context, string, int) (CodingResult, error), hooks CodingHooks) (CodingResult, error) {
 	run, e := c.continueCall(ctx, token, target, "state", nil)
 	if e != nil {
 		return CodingResult{}, e
@@ -131,7 +150,18 @@ func (c Client) continueCoding(ctx context.Context, token string, target CodingT
 			if next == "" {
 				return CodingResult{Version: 1, State: "idle"}, nil
 			}
-			run, e = c.continueCall(ctx, token, target, "advance", map[string]any{"run_id": run.ID, "revision": run.Revision, "chunk_id": next})
+			extra := map[string]any{"run_id": run.ID, "revision": run.Revision, "chunk_id": next}
+			if run.Execution != nil {
+				if hooks == nil {
+					return CodingResult{}, refused
+				}
+				workspace, e := hooks.Prepare(ctx, run, target)
+				if e != nil {
+					return CodingResult{}, e
+				}
+				extra["context"] = workspace
+			}
+			run, e = c.continueCall(ctx, token, target, "advance", extra)
 			if e != nil {
 				return CodingResult{}, e
 			}
@@ -152,12 +182,26 @@ func (c Client) continueCoding(ctx context.Context, token string, target CodingT
 	if e != nil {
 		return result, e
 	}
+	if run != nil && run.Execution != nil && result.State == "output-observed" {
+		if hooks == nil {
+			return CodingResult{}, refused
+		}
+		result, e = hooks.Finish(ctx, run, target, result)
+		if e != nil {
+			return result, e
+		}
+	}
 	if run != nil && result.State != "idle" {
 		if run.Current == nil || result.Task != *run.Current {
 			return CodingResult{}, refused
 		}
 		if result.OutputSHA != "" && result.CheckOutcome != "" {
-			_, e = c.continueCall(ctx, token, target, "record", map[string]any{"run_id": run.ID, "chunk_id": result.Task, "outcome": result.CheckOutcome, "output_sha256": result.OutputSHA})
+			extra := map[string]any{"run_id": run.ID, "chunk_id": result.Task, "outcome": result.CheckOutcome, "output_sha256": result.OutputSHA}
+			if run.Execution != nil {
+				extra["feedback"] = result.Feedback
+				extra["workspace_sha256"] = result.WorkspaceSHA
+			}
+			_, e = c.continueCall(ctx, token, target, "record", extra)
 			if e != nil {
 				result.State = "unknown"
 				result.OutputSHA = ""

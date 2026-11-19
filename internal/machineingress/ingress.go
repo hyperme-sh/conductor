@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/spendlimit"
 	"io"
 	"net/http"
 	"net/url"
@@ -43,6 +44,7 @@ type Submission struct {
 	MaxOutput   int    `json:"max_output_tokens"`
 }
 type Fact struct {
+	MoneyCurrency    string  `json:"money_currency,omitempty"`
 	CallerDevice     string  `json:"caller_device_id,omitempty"`
 	CallerEnrollment string  `json:"caller_enrollment_id,omitempty"`
 	Version          int     `json:"version"`
@@ -137,6 +139,9 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Tenant-ID", b.Tenant)
+	if task != "" && !c.Phone {
+		req.Header.Set("X-Conductor-Spend-Admission", "1")
+	}
 	client := http.Client{Timeout: 5 * time.Second}
 	if c.HTTP != nil {
 		client = *c.HTTP
@@ -295,6 +300,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	local.Header.Set("X-Conductor-Class", s.Class)
 	local.Header.Set("X-Conductor-Expected-Model", s.Destination)
 	local.Header.Set(h.ProxyHeader, h.ProxyToken())
+	if fact.MoneyCurrency != "" {
+		local = local.WithContext(spendlimit.With(local.Context(), spendlimit.Admission{Currency: fact.MoneyCurrency, Reserve: func(ctx context.Context, amount int64, source string) error {
+			return h.Client.reserveMoney(ctx, token, s, digest, fact.MoneyCurrency, amount, source)
+		}}))
+	}
 	h.Dispatch.ServeHTTP(w, local)
 	command := "complete"
 	if leaseCtx.Err() != nil || !outcome.Known() {
