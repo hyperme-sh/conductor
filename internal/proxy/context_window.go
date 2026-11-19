@@ -26,6 +26,16 @@ func (p *Proxy) checkContext(client, upstream *http.Request, tier config.Tier, p
 }
 
 func (p *Proxy) countChatContext(client, upstream *http.Request, tier config.Tier, protocol string, body []byte, lease string) (*int, int, error) {
+	count, status, err := p.countChatContextDetails(client, upstream, tier, protocol, body, lease)
+	if count == nil {
+		return nil, status, err
+	}
+	return &count.input, status, err
+}
+
+type contextCount struct{ input, capacity int }
+
+func (p *Proxy) countChatContextDetails(client, upstream *http.Request, tier config.Tier, protocol string, body []byte, lease string) (*contextCount, int, error) {
 	if protocol != translate.ProtoChat || tier.InputCounter != "vllm" {
 		return nil, 400, errors.New("hard context window requires a supported tokenizer for this protocol")
 	}
@@ -113,5 +123,5 @@ func (p *Proxy) countChatContext(client, upstream *http.Request, tier config.Tie
 	if tier.ContextWindow > 0 && (output < 1 || *result.Count > min(tier.ContextWindow, result.Max)-output) {
 		return nil, 400, errors.New("counted input and output allowance exceed the effective context window")
 	}
-	return result.Count, 0, nil
+	return &contextCount{input: *result.Count, capacity: result.Max}, 0, nil
 }

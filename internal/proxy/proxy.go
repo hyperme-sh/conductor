@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 	"io"
 	"net"
 	"net/http"
@@ -348,6 +349,14 @@ func PromoteAuthenticatedConnection(w http.ResponseWriter, r *http.Request) bool
 
 // ServeHTTP implements the local API.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/tasks/usage" {
+		p.serveTaskUsage(w, r)
+		return
+	}
+	if r.URL.Path == "/v1/recipes/draft" {
+		p.serveDraft(w, r)
+		return
+	}
 	if p.recipes != nil {
 		p.serveRuntime(w, r)
 		return
@@ -383,7 +392,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.PhoneIngress.ServeHTTP(w, r)
 		return
 	}
-	if p.MachineIngress != nil && r.URL.Path == "/v1/machine/prompt-submit" {
+	if p.MachineIngress != nil && (r.URL.Path == "/v1/machine/prompt-submit" || r.URL.Path == "/v1/machine/plan") {
 		p.MachineIngress.ServeHTTP(w, r)
 		return
 	}
@@ -488,6 +497,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reserve before review, token counting, or generation can spend anything.
+	moneyBound, moneyLimited, moneyErr := p.reserveMoney(r, proto, prepared, tier)
+	if moneyErr != nil {
+		writeJSON(w, moneyErr.status, map[string]any{"error": moneyErr.message})
+		return
+	}
+
 	previousTier := tier.Name
 	tier, err = p.reviewChoice(r, proto, prepared, boolField(obj, "stream"), decision, tier)
 	if err != nil {
@@ -575,12 +591,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if hash, err := hashBody(proto, prepared); err == nil {
 		prelimHash = hash
 	}
-	useNotes := p.Notes != nil && acceptsNotes(proto) && authorizeProxy(r) == nil
+	useNotes := !moneyLimited && p.Notes != nil && acceptsNotes(proto) && authorizeProxy(r) == nil
 	var query string
 	if useNotes {
 		query = userQuery(prepared)
 	}
-	next, didCompact, memLookups, memHits, compactErr := p.maybeCompact(r.Context(), r, proto, prepared, taskID, stepID, prelimHash, tier, originalLease)
+	var next []byte
+	var didCompact bool
+	var memLookups, memHits int
+	var compactErr error
+	if !moneyLimited {
+		next, didCompact, memLookups, memHits, compactErr = p.maybeCompact(r.Context(), r, proto, prepared, taskID, stepID, prelimHash, tier, originalLease)
+	}
 	if compactErr != nil {
 		var denied proxyAuthError
 		if errors.As(compactErr, &denied) {
@@ -715,7 +737,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if accountingURL != "" {
 			attemptID = uuid.NewString()
 		}
-		ledger, reserveErr := reserveTokens(p.Journal.Path()+".output.sqlite", taskID, stepID, tier.RecipeDigest, tokenBudget{attemptID: attemptID, outputLimit: tier.TaskOutputLimit, totalLimit: tier.TaskTokenLimit, input: inputCharge, output: allowance.output})
+		ledger, reserveErr := reserveTokens(p.Journal.Path()+".output.sqlite", taskID, stepID, tier.RecipeDigest, tokenBudget{scope: taskscope.From(r.Context()), attemptID: attemptID, outputLimit: tier.TaskOutputLimit, totalLimit: tier.TaskTokenLimit, input: inputCharge, output: allowance.output})
 		if reserveErr != nil {
 			status, message := http.StatusServiceUnavailable, "task budget ledger unavailable"
 			if errors.Is(reserveErr, errTaskBudget) {
@@ -735,6 +757,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		r = r.WithContext(context.WithValue(r.Context(), budgetContextKey{}, ledger))
 	}
+	if moneyLimited && (count == nil || !moneyBound.accepts(tier, *count, allowance)) {
+		writeJSON(w, 409, map[string]any{"error": "final request exceeds reserved monetary bound"})
+		return
+	}
+
 	p.forward(w, r, authReq, tier, wire, stream, secrets, base)
 }
 
@@ -1091,7 +1118,7 @@ func (p *Proxy) finish(w http.ResponseWriter, client *http.Request, status int, 
 func (p *Proxy) recordDispatch(client *http.Request, record metrics.StepRecord) {
 	ledger, _ := client.Context().Value(budgetContextKey{}).(*sql.DB)
 	if ledger != nil && record.UsageStatus == metrics.StatusMeasured && record.OutputTokens != nil && *record.OutputTokens >= 0 && record.InputTokens != nil && *record.InputTokens >= 0 {
-		if _, err := ledger.Exec("UPDATE output_attempts SET charge=?, input_charge=? WHERE task=? AND step=?", *record.OutputTokens, *record.InputTokens, record.TaskID, record.StepID); err != nil {
+		if _, err := ledger.Exec("UPDATE output_attempts SET charge=?, input_charge=?, measured=1 WHERE task=? AND step=?", *record.OutputTokens, *record.InputTokens, record.TaskID, record.StepID); err != nil {
 			p.Logf("task budget reconciliation failed")
 		}
 	}

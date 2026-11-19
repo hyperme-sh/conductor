@@ -93,15 +93,19 @@ func (r *recipeRuntime) reload() error {
 }
 
 func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" && r.URL.Path != "/v1/config/validate" {
+	if r.URL.Path != "/v1/config" && r.URL.Path != "/v1/config/reload" && r.URL.Path != "/v1/config/policy" && r.URL.Path != "/v1/config/models" && r.URL.Path != "/v1/config/validate" && r.URL.Path != "/v1/config/preview" {
 		p.recipes.active.Load().ServeHTTP(w, r)
 		return
 	}
-	if r.URL.Path == "/v1/config/models" || r.URL.Path == "/v1/config/validate" {
+	if r.URL.Path == "/v1/config/models" || r.URL.Path == "/v1/config/validate" || r.URL.Path == "/v1/config/preview" {
 		w.Header().Set("Cache-Control", "no-store")
 	}
 	if err := authorizeProxy(r); err != nil {
 		writeJSON(w, 401, map[string]any{"error": "proxy authorization required"})
+		return
+	}
+	if r.URL.Path == "/v1/config/preview" {
+		p.recipes.active.Load().serveRecipePreview(w, r)
 		return
 	}
 	if r.URL.Path == "/v1/config/validate" {
@@ -186,8 +190,20 @@ func (p *Proxy) serveRuntime(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective-policy.v1", "tiers": result,
-			"routing": map[string]any{"default_class": defaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}})
+		view := map[string]any{"schema": "hypermesh.conductor.effective-policy.v1", "tiers": result,
+			"routing": map[string]any{"default_class": defaultClass, "class_tiers": classes, "escalate_when_peak_tokens_above": thresholds}}
+		if r.Header.Get("X-Conductor-Policy-View") == "conditional-alternatives.v1" {
+			alternatives := []map[string]string{}
+			for _, tier := range []config.Tier{cfg.Cheap, cfg.Frontier} {
+				if next, eligible := refusalAlternative(cfg, tier, 1); tier.Configured() && eligible {
+					alternatives = append(alternatives, map[string]string{
+						"from_tier": tier.Name, "to_tier": next.Name, "condition": "upstream-refusal",
+					})
+				}
+			}
+			view["conditional_alternatives"] = alternatives
+		}
+		writeJSON(w, 200, view)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"schema": "hypermesh.conductor.effective.v1", "tiers": result})

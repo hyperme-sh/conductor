@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/spendlimit"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/operationoutcome"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 )
 
 const OperationTimeout = 300 * time.Second
@@ -42,6 +44,7 @@ type Submission struct {
 	MaxOutput   int    `json:"max_output_tokens"`
 }
 type Fact struct {
+	MoneyCurrency    string  `json:"money_currency,omitempty"`
 	CallerDevice     string  `json:"caller_device_id,omitempty"`
 	CallerEnrollment string  `json:"caller_enrollment_id,omitempty"`
 	Version          int     `json:"version"`
@@ -89,6 +92,16 @@ func ValidOrigin(origin string) bool {
 // Check authenticates through the existing Plane owner. An absent task requests
 // preview context only; it never consumes an operation or authorizes execution.
 func (c Client) Check(ctx context.Context, token string, b Binding, task, operation, digest, command string) (Fact, error) {
+	return c.check(ctx, token, b, task, operation, digest, command, false)
+}
+
+// ActiveContext requires current running consent and a fresh heartbeat.
+// It establishes identity only; policy and OS access remain separate checks.
+func (c Client) ActiveContext(ctx context.Context, token string, b Binding) (Fact, error) {
+	return c.check(ctx, token, b, "", "", "", "", true)
+}
+
+func (c Client) check(ctx context.Context, token string, b Binding, task, operation, digest, command string, active bool) (Fact, error) {
 	if !ValidOrigin(c.Origin) || !b.Valid() || !strings.HasPrefix(token, "hm_msi_") || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
 		return Fact{}, refused
 	}
@@ -98,6 +111,9 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 	nonce := uuid.NewString()
 	body := map[string]any{"version": 1, "request_id": nonce, "device_id": b.Device, "assignment_id": b.Assignment, "session_id": b.Session}
 	path := "context"
+	if active {
+		path = "access-context"
+	}
 	if task != "" {
 		if !canonicalID(task) || !canonicalID(operation) || len(digest) != 64 {
 			return Fact{}, refused
@@ -123,6 +139,9 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Tenant-ID", b.Tenant)
+	if task != "" && !c.Phone {
+		req.Header.Set("X-Conductor-Spend-Admission", "1")
+	}
 	client := http.Client{Timeout: 5 * time.Second}
 	if c.HTTP != nil {
 		client = *c.HTTP
@@ -167,6 +186,7 @@ func (c Client) Check(ctx context.Context, token string, b Binding, task, operat
 }
 
 type Handler struct {
+	ModelCapacity func(string) (string, int, int)
 	Authenticated func(http.ResponseWriter, *http.Request) bool
 	Client        Client
 	Tenant        string
@@ -200,6 +220,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 512<<10))
 	if e != nil {
 		fail(400)
+		return
+	}
+	if r.URL.Path == "/v1/machine/plan" && !h.Client.Phone {
+		h.plan(w, r, raw)
 		return
 	}
 	var s Submission
@@ -269,13 +293,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Renewals only extend the short current-authority check inside the fixed
 	// five-minute operation bound. They never permit another dispatch.
 	body, _ := json.Marshal(map[string]any{"model": s.Destination, "messages": []map[string]string{{"role": "user", "content": s.Prompt}}, "max_tokens": s.MaxOutput})
-	local, _ := http.NewRequestWithContext(leaseCtx, "POST", "http://localhost/v1/chat/completions", bytes.NewReader(body))
+	local, _ := http.NewRequestWithContext(taskscope.With(leaseCtx, taskscope.Binding{Owner: taskscope.Owner{Tenant: fact.Tenant, Organization: fact.Organization, Owner: fact.Owner}, Task: fact.Task}), "POST", "http://localhost/v1/chat/completions", bytes.NewReader(body))
 	local.Header.Set("Content-Type", "application/json")
 	local.Header.Set("X-Conductor-Task", s.Task)
 	local.Header.Set("X-Conductor-Step", s.Operation)
 	local.Header.Set("X-Conductor-Class", s.Class)
 	local.Header.Set("X-Conductor-Expected-Model", s.Destination)
 	local.Header.Set(h.ProxyHeader, h.ProxyToken())
+	if fact.MoneyCurrency != "" {
+		local = local.WithContext(spendlimit.With(local.Context(), spendlimit.Admission{Currency: fact.MoneyCurrency, Reserve: func(ctx context.Context, amount int64, source string) error {
+			return h.Client.reserveMoney(ctx, token, s, digest, fact.MoneyCurrency, amount, source)
+		}}))
+	}
 	h.Dispatch.ServeHTTP(w, local)
 	command := "complete"
 	if leaseCtx.Err() != nil || !outcome.Known() {

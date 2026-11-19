@@ -114,3 +114,42 @@ func TestPolicyViewUsesRuntimeClassFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestPolicyViewConditionalAlternatives(t *testing.T) {
+	t.Setenv(config.ProxyTokenEnv, "fixture-token")
+	for _, limit := range []int{10, 20} {
+		cfg := config.Config{
+			DefaultClass: "code", RefusalFallbackTier: "cheap",
+			Cheap:    config.Tier{Name: "cheap", Model: "alternate", BaseURL: "http://fixture", TaskOutputLimit: limit},
+			Frontier: config.Tier{Name: "frontier", Model: "primary", BaseURL: "http://fixture", TaskOutputLimit: 10},
+		}
+		p := New(cfg, nil, nil)
+		p.EnableRecipeReload("")
+		for _, optIn := range []bool{false, true} {
+			req := httptest.NewRequest("GET", "/v1/config/policy", nil)
+			req.Header.Set(config.ProxyTokenHeader, "fixture-token")
+			if optIn {
+				req.Header.Set("X-Conductor-Policy-View", "conditional-alternatives.v1")
+			}
+			out := httptest.NewRecorder()
+			p.serveRuntime(out, req)
+			var body struct {
+				Alternatives []map[string]string `json:"conditional_alternatives"`
+			}
+			if out.Code != 200 || json.Unmarshal(out.Body.Bytes(), &body) != nil {
+				t.Fatal(out.Code, out.Body.String())
+			}
+			if !optIn && body.Alternatives != nil {
+				t.Fatal("unnegotiated policy changed")
+			}
+			if optIn && limit == 10 {
+				if len(body.Alternatives) != 1 || body.Alternatives[0]["from_tier"] != "frontier" ||
+					body.Alternatives[0]["to_tier"] != "cheap" || body.Alternatives[0]["condition"] != "upstream-refusal" {
+					t.Fatal("expected the conditional frontier fallback", body.Alternatives)
+				}
+			} else if len(body.Alternatives) != 0 {
+				t.Fatal("reported an ineligible fallback")
+			}
+		}
+	}
+}

@@ -130,33 +130,39 @@ func sniffRefusal(body io.ReadCloser) (io.ReadCloser, []byte, bool) {
 	return &replayBody{Reader: io.MultiReader(bytes.NewReader(prefix), reader), Closer: body}, refusal, len(refusal) > 0
 }
 
+// refusalAlternative checks the static part of runtime fallback eligibility.
+func refusalAlternative(cfg config.Config, tier config.Tier, attempts int) (config.Tier, bool) {
+	maxAttempts := cfg.MaxRefusalAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 2
+	}
+	if attempts >= maxAttempts || cfg.RefusalFallbackTier == "" {
+		return config.Tier{}, false
+	}
+	next, err := cfg.Endpoint(cfg.RefusalFallbackTier)
+	if err != nil || next.Model == tier.Model ||
+		(tier.TaskTokenLimit > 0 && next.TaskTokenLimit != tier.TaskTokenLimit) ||
+		(tier.TaskOutputLimit > 0 && next.TaskOutputLimit != tier.TaskOutputLimit) {
+		return config.Tier{}, false
+	}
+	return next, true
+}
+
 func (p *Proxy) rerouteRefusal(w http.ResponseWriter, client *http.Request, tier config.Tier, raw []byte, record metrics.StepRecord) bool {
 	state, _ := client.Context().Value(refusalKey{}).(refusalState)
 	tried := append(append([]string(nil), state.tried...), tier.Model)
 	w.Header().Set("X-Conductor-Attempted-Models", strings.Join(tried, ","))
-	max := p.Config.MaxRefusalAttempts
-	if max == 0 {
-		max = 2
-	}
-	nextName := p.Config.RefusalFallbackTier
-	if len(state.body) == 0 || len(tried) >= max || nextName == "" {
+	next, eligible := refusalAlternative(p.Config, tier, len(tried))
+	if len(state.body) == 0 || !eligible {
 		return false
 	}
-	next, err := p.Config.Endpoint(nextName)
-	if _, captured := client.Context().Value(captureKey{}).(config.Tier); captured && nextName == "frontier" {
-		return false
-	}
-	if err != nil || next.Model == tier.Model {
+	if _, captured := client.Context().Value(captureKey{}).(config.Tier); captured && next.Name == "frontier" {
 		return false
 	}
 	for _, model := range tried {
 		if model == next.Model {
 			return false
 		}
-	}
-	// A fallback cannot escape an existing hard task limit.
-	if (tier.TaskTokenLimit > 0 && next.TaskTokenLimit != tier.TaskTokenLimit) || (tier.TaskOutputLimit > 0 && next.TaskOutputLimit != tier.TaskOutputLimit) {
-		return false
 	}
 	var original struct {
 		Stream bool `json:"stream"`
@@ -189,7 +195,7 @@ func (p *Proxy) rerouteRefusal(w http.ResponseWriter, client *http.Request, tier
 	record.Error = &reason
 	p.recordDispatch(client, record)
 	ctx := context.WithValue(client.Context(), budgetContextKey{}, (*sql.DB)(nil))
-	ctx = context.WithValue(ctx, refusalKey{}, refusalState{body: state.body, tried: tried, nextTier: nextName})
+	ctx = context.WithValue(ctx, refusalKey{}, refusalState{body: state.body, tried: tried, nextTier: next.Name})
 	retry := client.Clone(ctx)
 	retry.Body = io.NopCloser(bytes.NewReader(state.body))
 	retry.ContentLength = int64(len(state.body))

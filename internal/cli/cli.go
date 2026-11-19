@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/permissiondream"
 	"io"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hyperme-sh/hypermesh-conductor/internal/aiuditor"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/config"
@@ -40,6 +42,20 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "machine-context", "machine-prompt":
 		return machinePromptCmd(args[0], args[1:], os.Stdin, stdout, stderr)
+	case "continue-plan":
+		return continuePlanCmd(args[1:], os.Stdin, stdout, stderr)
+	case "coding-run":
+		return codingRunCmd(args[1:], os.Stdin, stdout, stderr)
+	case "permission-dream":
+		return accessReviewCmd("dream", args[1:], os.Stdin, stdout, stderr)
+	case "permission-action-admit":
+		return accessReviewCmd("admit", args[1:], os.Stdin, stdout, stderr)
+	case "permission-action-review":
+		return accessReviewCmd("action", args[1:], os.Stdin, stdout, stderr)
+	case "permission-read-admit":
+		return accessReviewCmd("read-admit", args[1:], os.Stdin, stdout, stderr)
+	case "permission-read-review":
+		return accessReviewCmd("read", args[1:], os.Stdin, stdout, stderr)
 	case "permission-preview":
 		return accessPreviewCmd(args[1:], os.Stdin, stdout, stderr)
 	case "capability-catalog":
@@ -204,6 +220,7 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 	peerGrantPath := fs.String("peer-grant", "", "optional single-hop peer ingress grant file")
 	socket := fs.Bool("socket", false, "serve a protected local socket (HYPERMESH_CONDUCTOR_SOCKET overrides its path)")
 	parentPID := fs.Int("parent-pid", 0, "stop the private socket server when this parent exits")
+	dreamSocket := fs.String("permission-dream-socket", "", "same-user Visor socket for bounded hourly permission reviews")
 	stdinListener := fs.Bool("stdin-listener", false, "serve a TCP or protected Unix listener inherited on stdin")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -241,6 +258,10 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err.Error())
 		return 2
 	}
+	if *dreamSocket != "" && !*socket && !*stdinListener {
+		fmt.Fprintln(stderr, "permission dreaming requires local listener mode")
+		return 2
+	}
 	server := proxy.New(cfg, hop, journal)
 	if *phonePlane != "" || *phoneInterface != "" {
 		if *phonePlane == "" || *socket || *stdinListener || cfg.ListenMode != config.ListenModeNetwork || cfg.AIU.Mode != config.AIUModeHTTP || validatePhoneInterface(cfg.Listen, *phoneInterface) != nil {
@@ -271,7 +292,18 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		}
 		server.MachineFactory = func(next config.Config) (http.Handler, error) {
 			receiver := proxy.New(next, hop, journal)
-			return machineingress.New(machineingress.Client{Origin: *machinePlane}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			handler, err := machineingress.New(machineingress.Client{Origin: *machinePlane}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			if err == nil {
+				handler.ModelCapacity = func(destination string) (string, int, int) {
+					for _, tier := range []config.Tier{next.Cheap, next.Frontier} {
+						if tier.Configured() && (destination == tier.Model || destination == tier.Name) {
+							return tier.Model, tier.ContextWindow, tier.OutputLimit
+						}
+					}
+					return "unknown", 0, 0
+				}
+			}
+			return handler, err
 		}
 		server.MachineIngress, err = server.MachineFactory(cfg)
 		if err != nil {
@@ -330,6 +362,9 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		}
 		defer listener.Close()
 		fmt.Fprintf(stdout, "listening on protected socket %s\n", path)
+		if *dreamSocket != "" {
+			go permissiondream.Run(ctx, time.Hour, 45*time.Second, permissiondream.LocalBatch(*dreamSocket), func(error) { fmt.Fprintln(stderr, "permission dreaming unavailable; will retry next interval") })
+		}
 		err = server.ServeLocalListenerContext(ctx, listener)
 		if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed)) {
 			err = nil
@@ -341,6 +376,10 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		defer listener.Close()
+		if *dreamSocket != "" && !dreamListenerAllowed(listener.Addr()) {
+			fmt.Fprintln(stderr, "permission dreaming requires a protected Unix listener")
+			return 2
+		}
 		if _, local := listener.Addr().(*net.UnixAddr); local {
 			if cfg.ListenMode == config.ListenModeNetwork {
 				fmt.Fprintln(stderr, "inherited Unix listener cannot use network mode")
@@ -352,6 +391,9 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
+			if *dreamSocket != "" {
+				go permissiondream.Run(ctx, time.Hour, 45*time.Second, permissiondream.LocalBatch(*dreamSocket), func(error) { fmt.Fprintln(stderr, "permission dreaming unavailable; will retry next interval") })
+			}
 			err = server.ServeLocalListenerContext(ctx, listener)
 			if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, http.ErrServerClosed)) {
 				err = nil
@@ -878,3 +920,5 @@ func writePretty(stdout io.Writer, payload any) int {
 	}
 	return 0
 }
+
+func dreamListenerAllowed(address net.Addr) bool { _, local := address.(*net.UnixAddr); return local }

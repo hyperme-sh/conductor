@@ -117,20 +117,27 @@ func recipeField(field, format string, args ...any) error {
 
 // ValidateRecipe applies the loader to value copies; active limits and records are untouched.
 func ValidateRecipe(data []byte, current Config) RecipeValidation {
+	_, result := PreviewRecipe(data, current)
+	return result
+}
+
+// PreviewRecipe returns candidate value copies only after the runtime loader accepts them.
+func PreviewRecipe(data []byte, current Config) (Config, RecipeValidation) {
 	result := RecipeValidation{Schema: "hypermesh.conductor.recipe-validation.v1", Field: "recipe"}
 	if len(data) > 65536 {
-		return result
+		return Config{}, result
 	}
 	cheap, frontier := current.Cheap, current.Frontier
 	err := applyRecipe(bytes.NewReader(data), &cheap, &frontier)
 	if err == nil {
 		result.Valid = true
 		result.Field = ""
-		return result
+		current.Cheap, current.Frontier = cheap, frontier
+		return current, result
 	}
 	var field *recipeFieldError
 	if errors.As(err, &field) {
 		result.Field = field.field
 	}
-	return result
+	return Config{}, result
 }
