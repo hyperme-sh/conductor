@@ -121,6 +121,28 @@ jobs:
         run: |
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges ghcr.io/hyperme-sh/conductor/runtime:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT --help
           test "$(docker image inspect ghcr.io/hyperme-sh/conductor/runtime:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT --format '{{.Config.User}}')" = 65532:65532
+      - name: Runtime image unit contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/hyperme-sh/conductor/runtime:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          contract_image="conductor-contracts:$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          contract_dir=$(mktemp -d "$RUNNER_TEMP/conductor-contracts.XXXXXX")
+          contract_container=""
+          trap 'if [ -n "$contract_container" ]; then docker rm -f "$contract_container" >/dev/null; fi; docker image rm "$contract_image" >/dev/null 2>&1 || true; rm -rf "$contract_dir"' EXIT
+          docker build -f Dockerfile.runtime-contracts -t "$contract_image" .
+          contract_container=$(docker create "$contract_image")
+          docker cp "$contract_container:/out/runtime-contract.test" "$contract_dir/contract.test"
+          chmod 755 "$contract_dir" "$contract_dir/contract.test"
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint /bin/sh "$image" -ec 'test "$(stat -c %u:%g /var/lib/conductor)" = 65532:65532'
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --tmpfs /var/lib/conductor:rw,noexec,nosuid,size=16m,uid=65532,gid=65532,mode=0700 \
+            --mount "type=bind,src=$contract_dir/contract.test,dst=/contract.test,readonly" \
+            -e CONDUCTOR_RUNTIME_CONTRACT=1 --entrypoint /contract.test "$image" -test.v
+          docker image inspect "$image" --format 'Runtime architecture={{.Architecture}} size_bytes={{.Size}}' >> "$GITHUB_STEP_SUMMARY"
+          docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint /sbin/apk "$image" info -v >> "$GITHUB_STEP_SUMMARY"
       - name: Publish moving TEST runtime
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
