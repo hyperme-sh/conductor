@@ -216,6 +216,8 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 	journalPath := fs.String("journal", "", "measurement journal")
 	phonePlane := fs.String("phone-plane", "", "HTTPS Plane authority for enrolled phone ingress")
 	phoneInterface := fs.String("phone-interface", "", "provisioned mesh interface for phone TLS ingress")
+	agentPlane := fs.String("remote-agent-plane", "", "HTTPS Plane authority for enrolled remote agents")
+	agentInterface := fs.String("remote-agent-interface", "", "provisioned mesh interface for remote-agent TLS ingress")
 	machinePlane := fs.String("machine-plane", "", "HTTPS Plane authority for machine prompt ingress (private socket only)")
 	peerGrantPath := fs.String("peer-grant", "", "optional single-hop peer ingress grant file")
 	socket := fs.Bool("socket", false, "serve a protected local socket (HYPERMESH_CONDUCTOR_SOCKET overrides its path)")
@@ -263,28 +265,49 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	server := proxy.New(cfg, hop, journal)
-	if *phonePlane != "" || *phoneInterface != "" {
-		if *phonePlane == "" || *socket || *stdinListener || cfg.ListenMode != config.ListenModeNetwork || cfg.AIU.Mode != config.AIUModeHTTP || validatePhoneInterface(cfg.Listen, *phoneInterface) != nil {
-			fmt.Fprintln(stderr, "phone ingress requires a provisioned mesh interface, explicit private listen address, TLS and authenticated AIuditor review")
-			return 2
-		}
-		server.PhoneFactory = func(next config.Config) (http.Handler, error) {
+	remoteFactory := func(client machineingress.Client) func(config.Config) (http.Handler, error) {
+		return func(next config.Config) (http.Handler, error) {
 			local := next
 			local.ListenMode = config.ListenModeLoopback
 			receiver := proxy.New(local, hop, journal)
-			handler, err := machineingress.New(machineingress.Client{Origin: *phonePlane, Phone: true}, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
+			handler, err := machineingress.New(client, os.Getenv(aiuditor.ServiceTenantEnv), receiver, config.ProxyTokenHeader, func() string { return os.Getenv(config.ProxyTokenEnv) })
 			if err != nil {
 				return nil, err
 			}
 			handler.Authenticated = proxy.PromoteAuthenticatedConnection
 			return handler, nil
 		}
+	}
+	remoteAllowed := func(plane, iface string) bool {
+		return plane != "" && !*socket && !*stdinListener &&
+			cfg.ListenMode == config.ListenModeNetwork && cfg.AIU.Mode == config.AIUModeHTTP &&
+			validatePhoneInterface(cfg.Listen, iface) == nil
+	}
+	if *phonePlane != "" || *phoneInterface != "" {
+		if !remoteAllowed(*phonePlane, *phoneInterface) {
+			fmt.Fprintln(stderr, "phone ingress requires a provisioned mesh interface, explicit private listen address, TLS and authenticated AIuditor review")
+			return 2
+		}
+		server.PhoneFactory = remoteFactory(machineingress.Client{Origin: *phonePlane, Phone: true})
 		server.PhoneIngress, err = server.PhoneFactory(cfg)
 		if err != nil {
 			fmt.Fprintln(stderr, "invalid phone ingress configuration")
 			return 2
 		}
 	}
+	if *agentPlane != "" || *agentInterface != "" {
+		if !remoteAllowed(*agentPlane, *agentInterface) {
+			fmt.Fprintln(stderr, "remote-agent ingress requires a provisioned mesh interface, explicit private listen address, TLS and authenticated AIuditor review")
+			return 2
+		}
+		server.RemoteAgentFactory = remoteFactory(machineingress.Client{Origin: *agentPlane, RemoteAgent: true})
+		server.RemoteAgentIngress, err = server.RemoteAgentFactory(cfg)
+		if err != nil {
+			fmt.Fprintln(stderr, "invalid remote-agent ingress configuration")
+			return 2
+		}
+	}
+
 	if *machinePlane != "" {
 		if !*socket || cfg.AIU.Mode != config.AIUModeHTTP {
 			fmt.Fprintln(stderr, "machine ingress requires private socket and authenticated AIuditor review")

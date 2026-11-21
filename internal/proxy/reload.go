@@ -28,6 +28,8 @@ func (p *Proxy) EnableRecipeReload(path string) {
 	child.PeerIngress = p.PeerIngress
 	child.PhoneIngress = p.PhoneIngress
 	child.PhoneFactory = p.PhoneFactory
+	child.RemoteAgentIngress = p.RemoteAgentIngress
+	child.RemoteAgentFactory = p.RemoteAgentFactory
 	child.MachineIngress = p.MachineIngress
 	child.MachineFactory = p.MachineFactory
 	child.Notes = p.Notes
@@ -68,6 +70,14 @@ func (r *recipeRuntime) reload() error {
 	child.PhoneFactory = old.PhoneFactory
 	if child.PhoneFactory != nil {
 		child.PhoneIngress, err = child.PhoneFactory(next)
+		if err != nil {
+			return err
+		}
+	}
+	child.RemoteAgentIngress = old.RemoteAgentIngress
+	child.RemoteAgentFactory = old.RemoteAgentFactory
+	if child.RemoteAgentFactory != nil {
+		child.RemoteAgentIngress, err = child.RemoteAgentFactory(next)
 		if err != nil {
 			return err
 		}
