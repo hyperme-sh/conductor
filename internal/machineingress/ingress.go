@@ -64,10 +64,13 @@ type Fact struct {
 	State            string  `json:"state,omitempty"`
 }
 type Client struct {
-	Phone  bool
-	Origin string
-	HTTP   *http.Client
+	Phone       bool
+	RemoteAgent bool
+	Origin      string
+	HTTP        *http.Client
 }
+
+func (c Client) remote() bool { return c.Phone || c.RemoteAgent }
 
 func canonicalID(id string) bool {
 	u, e := uuid.Parse(id)
@@ -102,10 +105,14 @@ func (c Client) ActiveContext(ctx context.Context, token string, b Binding) (Fac
 }
 
 func (c Client) check(ctx context.Context, token string, b Binding, task, operation, digest, command string, active bool) (Fact, error) {
-	if !ValidOrigin(c.Origin) || !b.Valid() || !strings.HasPrefix(token, "hm_msi_") || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
+	prefix := "hm_msi_"
+	if c.RemoteAgent {
+		prefix = "hm_rag_"
+	}
+	if c.Phone && c.RemoteAgent || !ValidOrigin(c.Origin) || !b.Valid() || !strings.HasPrefix(token, prefix) || len(token) == len(prefix) || len(token) > 4096 || strings.ContainsAny(token, "\r\n") {
 		return Fact{}, refused
 	}
-	if (c.Phone && (!canonicalID(b.Enrollment) || task == "")) || (!c.Phone && b.Enrollment != "") {
+	if (c.remote() && (!canonicalID(b.Enrollment) || task == "")) || (!c.remote() && b.Enrollment != "") {
 		return Fact{}, refused
 	}
 	nonce := uuid.NewString()
@@ -127,6 +134,10 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 	kind := "machine"
 	if c.Phone {
 		kind = "phone"
+	} else if c.RemoteAgent {
+		kind = "remote-agent"
+	}
+	if c.remote() {
 		body["enrollment_id"] = b.Enrollment
 	}
 	raw, _ := json.Marshal(body)
@@ -139,7 +150,7 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Tenant-ID", b.Tenant)
-	if task != "" && !c.Phone {
+	if task != "" && !c.remote() {
 		req.Header.Set("X-Conductor-Spend-Admission", "1")
 	}
 	client := http.Client{Timeout: 5 * time.Second}
@@ -169,8 +180,8 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 	if fact.Version != 1 || fact.Request != nonce || fact.Tenant != b.Tenant || fact.Bot != b.Bot || fact.Assignment != b.Assignment || fact.Session != b.Session || !canonicalID(fact.Owner) || !canonicalID(fact.Organization) || fact.Principal == "" || len(fact.Principal) > 512 || fact.Expires <= now || fact.Expires > now+11 {
 		return Fact{}, refused
 	}
-	if c.Phone {
-		if !canonicalID(fact.Device) || fact.CallerDevice != b.Device || fact.CallerEnrollment != b.Enrollment {
+	if c.remote() {
+		if c.RemoteAgent && fact.MoneyCurrency != "" || !canonicalID(fact.Device) || fact.CallerDevice != b.Device || fact.CallerEnrollment != b.Enrollment {
 			return Fact{}, refused
 		}
 	} else if fact.Device != b.Device || fact.CallerDevice != "" || fact.CallerEnrollment != "" {
@@ -197,7 +208,7 @@ type Handler struct {
 }
 
 func New(client Client, tenant string, dispatch http.Handler, header string, token func() string) (*Handler, error) {
-	if !ValidOrigin(client.Origin) || !canonicalID(tenant) || dispatch == nil || header == "" || token == nil {
+	if client.Phone && client.RemoteAgent || !ValidOrigin(client.Origin) || !canonicalID(tenant) || dispatch == nil || header == "" || token == nil {
 		return nil, refused
 	}
 	return &Handler{Client: client, Tenant: tenant, Dispatch: dispatch, ProxyHeader: header, ProxyToken: token, slots: make(chan struct{}, 8)}, nil
@@ -216,13 +227,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(429)
 		return
 	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	authorization := r.Header.Get("Authorization")
+	if h.Client.RemoteAgent && !strings.HasPrefix(authorization, "Bearer ") {
+		fail(403)
+		return
+	}
+	token := strings.TrimPrefix(authorization, "Bearer ")
 	raw, e := io.ReadAll(http.MaxBytesReader(w, r.Body, 512<<10))
 	if e != nil {
 		fail(400)
 		return
 	}
-	if r.URL.Path == "/v1/machine/plan" && !h.Client.Phone {
+	if r.URL.Path == "/v1/machine/plan" && !h.Client.remote() {
 		h.plan(w, r, raw)
 		return
 	}
