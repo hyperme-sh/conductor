@@ -33,6 +33,7 @@ import (
 	"github.com/hyperme-sh/hypermesh-conductor/internal/metrics"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/notes"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/prefix"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/taskscope"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/translate"
 )
 
@@ -3339,6 +3340,43 @@ func TestIncompleteSummaryKeepsOriginalConversation(t *testing.T) {
 			}
 			if _, err := os.Stat(history.PathFor(journal.Path())); !os.IsNotExist(err) {
 				t.Fatal("unexpected recovery file", err)
+			}
+		})
+	}
+}
+
+func TestAdmittedModelLeaseCannotBeRemovedOrReplaced(t *testing.T) {
+	const lease = "11111111-1111-4111-8111-111111111111"
+	ctx := taskscope.With(t.Context(), taskscope.Binding{ModelLease: lease})
+	src := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	src.Header.Set("X-Api-Key", "fixture-renter-key")
+	src.Header.Set("X-Conductor-Credential-Origin", "https://gateway.test.example")
+	gateway := config.Tier{Gateway: true, BaseURL: "https://gateway.test.example/v1", Auth: config.AuthPassthrough}
+	other := gateway
+	other.BaseURL = "https://other.test.example/v1"
+	for _, tc := range []struct {
+		name  string
+		lease string
+		tier  config.Tier
+		want  bool
+	}{
+		{"exact", lease, gateway, true},
+		{"removed", "", gateway, false},
+		{"changed", "22222222-2222-4222-8222-222222222222", gateway, false},
+		{"other gateway", lease, other, false},
+		{"direct tier", lease, config.Tier{Direct: true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dst, _ := http.NewRequest(http.MethodPost, tc.tier.BaseURL, nil)
+			_, err := applyGatewayDispatch(dst, src, tc.tier, tc.lease)
+			if (err == nil) != tc.want {
+				t.Fatalf("dispatch error %v", err)
+			}
+			if tc.want && (dst.Header.Get("X-Hypermesh-Lease-Id") != lease || dst.Header.Get("X-Api-Key") != "fixture-renter-key") {
+				t.Fatal("gateway request lost lease or renter credential")
+			}
+			if !tc.want && dst.Header.Get("X-Api-Key") != "" {
+				t.Fatal("refused request retained the renter credential")
 			}
 		})
 	}

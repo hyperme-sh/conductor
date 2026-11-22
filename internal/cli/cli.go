@@ -33,6 +33,18 @@ import (
 	"github.com/hyperme-sh/hypermesh-conductor/internal/rules"
 )
 
+func modelLeaseGateway(cfg config.Config, origin string) bool {
+	if !cfg.GatewayEnforcement {
+		return false
+	}
+	for _, tier := range []config.Tier{cfg.Cheap, cfg.Frontier} {
+		if tier.Configured() && (!tier.Gateway || tier.Auth != config.AuthPassthrough || tier.APIKeyEnv != "" || tier.BaseURL != origin+"/v1") {
+			return false
+		}
+	}
+	return true
+}
+
 // Main runs one invocation. args do not include the program name.
 func Main(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -218,6 +230,8 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 	phoneInterface := fs.String("phone-interface", "", "provisioned mesh interface for phone TLS ingress")
 	agentPlane := fs.String("remote-agent-plane", "", "HTTPS Plane authority for enrolled remote agents")
 	agentInterface := fs.String("remote-agent-interface", "", "provisioned mesh interface for remote-agent TLS ingress")
+	agentLease := fs.String("remote-agent-model-lease", "", "owner-provisioned shared model lease for remote agents")
+	agentGateway := fs.String("remote-agent-model-gateway", "", "HTTPS origin for the owner-provisioned model lease")
 	machinePlane := fs.String("machine-plane", "", "HTTPS Plane authority for machine prompt ingress (private socket only)")
 	peerGrantPath := fs.String("peer-grant", "", "optional single-hop peer ingress grant file")
 	socket := fs.Bool("socket", false, "serve a protected local socket (HYPERMESH_CONDUCTOR_SOCKET overrides its path)")
@@ -267,6 +281,9 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 	server := proxy.New(cfg, hop, journal)
 	remoteFactory := func(client machineingress.Client) func(config.Config) (http.Handler, error) {
 		return func(next config.Config) (http.Handler, error) {
+			if client.ModelLease.ID != "" && !modelLeaseGateway(next, client.ModelLease.Origin) {
+				return nil, errors.New("model lease requires its declared gateway for every prompt tier")
+			}
 			local := next
 			local.ListenMode = config.ListenModeLoopback
 			receiver := proxy.New(local, hop, journal)
@@ -295,12 +312,14 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	if *agentPlane != "" || *agentInterface != "" {
+	modelLease := machineingress.ModelLease{ID: *agentLease, Origin: strings.TrimSuffix(*agentGateway, "/"),
+		RenterKey: os.Getenv("CONDUCTOR_REMOTE_AGENT_RENTER_KEY")}
+	if *agentPlane != "" || *agentInterface != "" || modelLease != (machineingress.ModelLease{}) {
 		if !remoteAllowed(*agentPlane, *agentInterface) {
 			fmt.Fprintln(stderr, "remote-agent ingress requires a provisioned mesh interface, explicit private listen address, TLS and authenticated AIuditor review")
 			return 2
 		}
-		server.RemoteAgentFactory = remoteFactory(machineingress.Client{Origin: *agentPlane, RemoteAgent: true})
+		server.RemoteAgentFactory = remoteFactory(machineingress.Client{Origin: *agentPlane, RemoteAgent: true, ModelLease: modelLease})
 		server.RemoteAgentIngress, err = server.RemoteAgentFactory(cfg)
 		if err != nil {
 			fmt.Fprintln(stderr, "invalid remote-agent ingress configuration")
