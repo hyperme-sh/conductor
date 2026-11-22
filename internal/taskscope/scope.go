@@ -13,7 +13,8 @@ type Owner struct {
 }
 type Binding struct {
 	Owner
-	Task string
+	Task       string
+	ModelLease string
 }
 type key struct{}
 

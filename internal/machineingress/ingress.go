@@ -44,6 +44,7 @@ type Submission struct {
 	MaxOutput   int    `json:"max_output_tokens"`
 }
 type Fact struct {
+	ModelLease       string  `json:"model_lease_id,omitempty"`
 	MoneyCurrency    string  `json:"money_currency,omitempty"`
 	CallerDevice     string  `json:"caller_device_id,omitempty"`
 	CallerEnrollment string  `json:"caller_enrollment_id,omitempty"`
@@ -63,7 +64,19 @@ type Fact struct {
 	Digest           string  `json:"request_sha256,omitempty"`
 	State            string  `json:"state,omitempty"`
 }
+type ModelLease struct {
+	ID        string
+	Origin    string
+	RenterKey string
+}
+
+func (m ModelLease) Valid() bool {
+	return canonicalID(m.ID) && ValidOrigin(m.Origin) && m.RenterKey != "" &&
+		len(m.RenterKey) <= 4096 && !strings.ContainsAny(m.RenterKey, " \t\r\n")
+}
+
 type Client struct {
+	ModelLease  ModelLease
 	Phone       bool
 	RemoteAgent bool
 	Origin      string
@@ -136,6 +149,9 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 		kind = "phone"
 	} else if c.RemoteAgent {
 		kind = "remote-agent"
+		if c.ModelLease.ID != "" {
+			body["model_lease_id"] = c.ModelLease.ID
+		}
 	}
 	if c.remote() {
 		body["enrollment_id"] = b.Enrollment
@@ -180,6 +196,9 @@ func (c Client) check(ctx context.Context, token string, b Binding, task, operat
 	if fact.Version != 1 || fact.Request != nonce || fact.Tenant != b.Tenant || fact.Bot != b.Bot || fact.Assignment != b.Assignment || fact.Session != b.Session || !canonicalID(fact.Owner) || !canonicalID(fact.Organization) || fact.Principal == "" || len(fact.Principal) > 512 || fact.Expires <= now || fact.Expires > now+11 {
 		return Fact{}, refused
 	}
+	if fact.ModelLease != c.ModelLease.ID {
+		return Fact{}, refused
+	}
 	if c.remote() {
 		if c.RemoteAgent && fact.MoneyCurrency != "" || !canonicalID(fact.Device) || fact.CallerDevice != b.Device || fact.CallerEnrollment != b.Enrollment {
 			return Fact{}, refused
@@ -209,6 +228,9 @@ type Handler struct {
 
 func New(client Client, tenant string, dispatch http.Handler, header string, token func() string) (*Handler, error) {
 	if client.Phone && client.RemoteAgent || !ValidOrigin(client.Origin) || !canonicalID(tenant) || dispatch == nil || header == "" || token == nil {
+		return nil, refused
+	}
+	if client.ModelLease != (ModelLease{}) && (!client.RemoteAgent || !client.ModelLease.Valid()) {
 		return nil, refused
 	}
 	return &Handler{Client: client, Tenant: tenant, Dispatch: dispatch, ProxyHeader: header, ProxyToken: token, slots: make(chan struct{}, 8)}, nil
@@ -309,13 +331,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Renewals only extend the short current-authority check inside the fixed
 	// five-minute operation bound. They never permit another dispatch.
 	body, _ := json.Marshal(map[string]any{"model": s.Destination, "messages": []map[string]string{{"role": "user", "content": s.Prompt}}, "max_tokens": s.MaxOutput})
-	local, _ := http.NewRequestWithContext(taskscope.With(leaseCtx, taskscope.Binding{Owner: taskscope.Owner{Tenant: fact.Tenant, Organization: fact.Organization, Owner: fact.Owner}, Task: fact.Task}), "POST", "http://localhost/v1/chat/completions", bytes.NewReader(body))
+	local, _ := http.NewRequestWithContext(taskscope.With(leaseCtx, taskscope.Binding{Owner: taskscope.Owner{Tenant: fact.Tenant, Organization: fact.Organization, Owner: fact.Owner}, Task: fact.Task, ModelLease: fact.ModelLease}), "POST", "http://localhost/v1/chat/completions", bytes.NewReader(body))
 	local.Header.Set("Content-Type", "application/json")
 	local.Header.Set("X-Conductor-Task", s.Task)
 	local.Header.Set("X-Conductor-Step", s.Operation)
 	local.Header.Set("X-Conductor-Class", s.Class)
 	local.Header.Set("X-Conductor-Expected-Model", s.Destination)
 	local.Header.Set(h.ProxyHeader, h.ProxyToken())
+	if fact.ModelLease != "" {
+		local.Header.Set("X-Hypermesh-Lease-Id", fact.ModelLease)
+		local.Header.Set("X-Tenant-ID", fact.Tenant)
+		local.Header.Set("X-Conductor-Credential-Origin", h.Client.ModelLease.Origin)
+		local.Header.Set("X-Api-Key", h.Client.ModelLease.RenterKey)
+	}
 	if fact.MoneyCurrency != "" {
 		local = local.WithContext(spendlimit.With(local.Context(), spendlimit.Admission{Currency: fact.MoneyCurrency, Reserve: func(ctx context.Context, amount int64, source string) error {
 			return h.Client.reserveMoney(ctx, token, s, digest, fact.MoneyCurrency, amount, source)

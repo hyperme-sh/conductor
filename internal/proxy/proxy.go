@@ -1402,6 +1402,10 @@ func applyGatewayIdentity(dst, src *http.Request, tier config.Tier, clientKey st
 // Gateway auth, renter headers, and the reviewed lease are attached together.
 // Every JSON POST built here carries Content-Type, including the tokenizer.
 func applyGatewayDispatch(dst, src *http.Request, tier config.Tier, lease string) ([]string, error) {
+	if scope := taskscope.From(src.Context()); scope != nil && scope.ModelLease != "" &&
+		(!tier.Gateway || lease != scope.ModelLease) {
+		return nil, fmt.Errorf("required model lease differs from reviewed gateway request")
+	}
 	if dst.Header.Get("Content-Type") == "" {
 		dst.Header.Set("Content-Type", "application/json")
 	}
