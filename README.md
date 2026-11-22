@@ -247,9 +247,11 @@ installed packages and image size in the job summary. TLS root loading is not a
 live upstream connection check. Raw macOS/Windows builds are separate; no other
 container architecture is claimed by this pilot.
 
-The existing automatic moving TEST publication remains unchanged. This source
-change does not install a service or authorize production promotion. Other
-services and their shared dependency graphs remain under Infra #1857.
+The successful default-branch runtime job retains the tested image as a
+`conductor-runtime-candidate-<revision>` artifact. Its `candidate.json` records
+the source revision, package version, platform, image ID, run and archive
+SHA-256. The automatic moving TEST channel remains the deployment path for TEST.
+Stable publication requires separate approval for the exact candidate.
 
 ### New-task recipe allowance preview (disabled by default)
 
