@@ -143,6 +143,51 @@ jobs:
           docker image inspect "$image" --format 'Runtime architecture={{.Architecture}} size_bytes={{.Size}}' >> "$GITHUB_STEP_SUMMARY"
           docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
             --entrypoint /sbin/apk "$image" info -v >> "$GITHUB_STEP_SUMMARY"
+      - name: Capture the tested runtime candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/hyperme-sh/conductor/runtime:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          directory="$RUNNER_TEMP/conductor-runtime-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -m 0700 -- "$directory"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = linux/amd64
+          docker image save "$image" | gzip -n > "$directory/runtime.tar.gz"
+          python3 - "$directory" "$(docker image inspect --format '{{.Id}}' "$image")" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          directory = Path(sys.argv[1])
+          image_id = sys.argv[2]
+          version = Path("VERSION").read_text().strip()
+          if not re.fullmatch(r"0\.\d+\.\d+", version) or not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+              raise SystemExit("Exact Conductor candidate version and image required")
+          with (directory / "runtime.tar.gz").open("rb") as archive:
+              digest = hashlib.file_digest(archive, "sha256").hexdigest()
+          manifest = {
+              "version": version,
+              "revision": os.environ["GITHUB_SHA"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "platform": "linux/amd64",
+              "image_id": image_id,
+              "archive_sha256": digest,
+          }
+          (directory / "candidate.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+      - name: Retain the qualified main candidate
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: conductor-runtime-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/conductor-runtime-${{ github.run_id }}-${{ github.run_attempt }}/
+          if-no-files-found: error
+          retention-days: 30
       - name: Publish moving TEST runtime
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
