@@ -88,6 +88,10 @@ Conductor is designed to work without a language model. With rules alone it can 
 - Not a replacement for Hypermesh billing or payment. Conductor reserves and meters against budgets; Hypermesh and its billing services own prices, charges and refunds.
 - Not a scheduler for compute. Hypermesh makes the host placement decision.
 
+## Business tools
+
+The private runner command exposes [scoped Odoo tools and a fixture-only Outlook reader](docs/business-tools.md).
+
 ## Routing and measurement
 
 Conductor listens on `127.0.0.1:8787` by default and exposes OpenAI-compatible `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`, and `/v1/models`, plus Anthropic-compatible `/v1/messages`. Streaming responses are server-sent events. A third-party client sets its base URL to this proxy.

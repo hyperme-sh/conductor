@@ -48,10 +48,12 @@ func modelLeaseGateway(cfg config.Config, origin string) bool {
 // Main runs one invocation. args do not include the program name.
 func Main(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: conductor <prepare-leases|route|submit|run|summary|serve|index|primer|dream|rules|capability-review|capability-dispatch|capability-catalog>")
+		fmt.Fprintln(stderr, "usage: conductor <prepare-leases|route|submit|run|summary|serve|index|primer|dream|rules|capability-review|capability-dispatch|capability-catalog|business-tool>")
 		return 2
 	}
 	switch args[0] {
+	case "business-tool":
+		return businessToolCmd(args[1:], os.Stdin, stdout, stderr)
 	case "machine-context", "machine-prompt":
 		return machinePromptCmd(args[0], args[1:], os.Stdin, stdout, stderr)
 	case "continue-plan":
@@ -97,7 +99,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	case "rules":
 		return rulesCmd(args[1:], stdout, stderr)
 	case "-h", "--help", "help":
-		fmt.Fprintln(stdout, "usage: conductor <prepare-leases|route|submit|run|summary|serve|index|primer|dream|rules|capability-review|capability-dispatch|capability-catalog>")
+		fmt.Fprintln(stdout, "usage: conductor <prepare-leases|route|submit|run|summary|serve|index|primer|dream|rules|capability-review|capability-dispatch|capability-catalog|business-tool>")
 		return 0
 	default:
 		fmt.Fprintf(stderr, "unknown command %s\n", args[0])
