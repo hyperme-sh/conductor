@@ -64,7 +64,7 @@ func (a *Authority) Authorize(ctx context.Context, binding Binding, operation st
 		Reason    string `json:"reason"`
 	}
 	if getJSON(a.client, request, 4096, &decision) != nil ||
-		decision.Version != 1 || decision.RequestID != call.RequestID || !decision.Allowed {
+		decision.Version != 1 || decision.RequestID != call.RequestID || !decision.Allowed || decision.Reason != "allowed" {
 		return Denied
 	}
 	return nil

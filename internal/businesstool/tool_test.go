@@ -61,11 +61,14 @@ func TestAuthoritySignsAndBindsFreshPerOperationDecisions(t *testing.T) {
 			return
 		}
 		previous = call.RequestID
-		id := call.RequestID
-		if call.Operation == "draft" {
+		id, reason := call.RequestID, "allowed"
+		switch call.Operation {
+		case "draft":
 			id = want.GrantID
+		case "send":
+			reason = "operation_denied"
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "request_id": id, "allowed": true, "reason": "allowed"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"version": 1, "request_id": id, "allowed": true, "reason": reason})
 	}))
 	defer server.Close()
 	reviewer, err := NewAuthority(server.URL, fixtureKey, nil)
@@ -77,6 +80,9 @@ func TestAuthoritySignsAndBindsFreshPerOperationDecisions(t *testing.T) {
 	}
 	if err = reviewer.Authorize(context.Background(), want, "draft"); err != Denied {
 		t.Fatalf("unbound authorization response accepted: %v", err)
+	}
+	if err = reviewer.Authorize(context.Background(), want, "send"); err != Denied {
+		t.Fatalf("contradictory authorization response accepted: %v", err)
 	}
 }
 
