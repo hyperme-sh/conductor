@@ -43,8 +43,9 @@ const (
 )
 
 var (
-	reference = regexp.MustCompile(`^[A-Za-z0-9._:=+@-]{1,200}$`)
-	leadID    = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
+	reference   = regexp.MustCompile(`^[A-Za-z0-9._:=+@-]{1,200}$`)
+	opaqueScope = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+	leadID      = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 )
 
 type Binding struct {
@@ -66,7 +67,7 @@ func isUUID(value string) bool {
 
 func (b Binding) valid() bool {
 	if !isUUID(b.TenantID) || !isUUID(b.WorkspaceID) || !isUUID(b.ConnectionID) || !isUUID(b.GrantID) ||
-		!reference.MatchString(b.Target) || !reference.MatchString(b.ActorID) {
+		!opaqueScope.MatchString(b.Target) || !opaqueScope.MatchString(b.ActorID) {
 		return false
 	}
 	switch b.ActorKind {

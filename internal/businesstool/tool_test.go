@@ -38,6 +38,18 @@ func (f reviewFunc) Authorize(_ context.Context, binding Binding, operation stri
 	return f(binding, operation)
 }
 
+func TestRunnerRejectsAnAddressAsOpaqueScope(t *testing.T) {
+	scope := binding("outlook")
+	scope.Target = "shared@example.invalid"
+	runner := Runner{Binding: scope, Review: reviewFunc(func(Binding, string) error {
+		t.Fatal("invalid scope reached the authority")
+		return Denied
+	})}
+	if _, err := invoke(runner, "outlook.messages.list", `{"folder":"inbox"}`); err != Invalid {
+		t.Fatalf("mailbox address accepted as an opaque target: %v", err)
+	}
+}
+
 func TestAuthoritySignsAndBindsFreshPerOperationDecisions(t *testing.T) {
 	want := binding("odoo")
 	var previous string
