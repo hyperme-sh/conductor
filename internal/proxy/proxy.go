@@ -75,6 +75,7 @@ type Proxy struct {
 	RemoteAgentIngress http.Handler
 	RemoteAgentFactory func(config.Config) (http.Handler, error)
 	MachineIngress     http.Handler
+	Workspace          http.Handler
 	MachineFactory     func(config.Config) (http.Handler, error)
 	PeerFactory        func(config.Config) (http.Handler, error)
 	Config             config.Config
@@ -145,6 +146,12 @@ func (p *Proxy) ServeLocalListenerContext(ctx context.Context, listener net.List
 		return err
 	}
 	server := p.server()
+	if p.Workspace != nil {
+		mux := http.NewServeMux()
+		mux.Handle("/v1/workspace-task", p.Workspace)
+		mux.Handle("/", server.Handler)
+		server.Handler = mux
+	}
 	defer server.Close()
 	defer listener.Close()
 	done := make(chan struct{})
