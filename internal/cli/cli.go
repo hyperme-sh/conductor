@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/hyperme-sh/hypermesh-conductor/internal/aiuditor"
+	"github.com/hyperme-sh/hypermesh-conductor/internal/cloudworkspace"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/config"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/history"
 	"github.com/hyperme-sh/hypermesh-conductor/internal/leases"
@@ -281,6 +282,17 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	server := proxy.New(cfg, hop, journal)
+	if path := os.Getenv("HYPERMESH_WORKSPACE_LEASE_FILE"); path != "" {
+		if runtime.GOOS != "linux" || !*stdinListener || cfg.ListenMode == config.ListenModeNetwork {
+			fmt.Fprintln(stderr, "workspace lease requires a protected inherited Linux listener")
+			return 2
+		}
+		server.Workspace, err = cloudworkspace.New(path)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+	}
 	remoteFactory := func(client machineingress.Client) func(config.Config) (http.Handler, error) {
 		return func(next config.Config) (http.Handler, error) {
 			if client.ModelLease.ID != "" && !modelLeaseGateway(next, client.ModelLease.Origin) {
@@ -443,6 +455,10 @@ func serveCmd(args []string, stdout, stderr io.Writer) int {
 				err = nil
 			}
 		} else {
+			if server.Workspace != nil {
+				fmt.Fprintln(stderr, "workspace lease requires a protected Unix listener")
+				return 2
+			}
 			err = server.ServeListener(listener)
 		}
 	} else {
